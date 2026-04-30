@@ -361,7 +361,7 @@ def get_cds_sequence(tr):
 Translates sgRNA sequence and annotates frame
 '''
 def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_strand, sgrna_strand, utr, e, label):
-	map_key = abs_pos.keys()[abs_pos.values().index(sgrna_start_pos)]
+	map_key = next(key for key, value in abs_pos.items() if value == sgrna_start_pos)
 	sgrna_trans = {}
 	if sgrna_strand == 'sense':
 		for i,n in enumerate(sgrna):
@@ -378,7 +378,7 @@ def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_
 							sgrna_trans[n+str(i+1)] = '0_'+label+':+'+str(map_key - int(e[1]))
 					map_key +=1
 				else:
-					sgrna_trans[n+str(i+1)] = str((cds_map[map_key]/3)+1)+'_'+str(cds_map[map_key]%3)
+					sgrna_trans[n+str(i+1)] = str((cds_map[map_key]//3)+1)+'_'+str(cds_map[map_key]%3)
 					map_key +=1
 			else:
 				if map_key not in cds_map.keys():
@@ -393,7 +393,7 @@ def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_
 							sgrna_trans[n+str(i+1)] = '0_'+label+':-'+str(map_key - int(e[1]))
 					map_key-=1
 				else:
-					sgrna_trans[n+str(i+1)] = str((cds_map[map_key]/3)+1)+'_'+str(cds_map[map_key]%3)
+					sgrna_trans[n+str(i+1)] = str((cds_map[map_key]//3)+1)+'_'+str(cds_map[map_key]%3)
 					map_key -=1
 	elif sgrna_strand == 'antisense':
 		for i,n in enumerate(sgrna):
@@ -410,7 +410,7 @@ def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_
 							sgrna_trans[n+str(len(sgrna)-i)] = '0_'+label+':+'+str(map_key - int(e[1]))
 					map_key+=1
 				else:
-					sgrna_trans[n+str(len(sgrna)-i)] = str((cds_map[map_key]/3)+1)+'_'+str(cds_map[map_key]%3)
+					sgrna_trans[n+str(len(sgrna)-i)] = str((cds_map[map_key]//3)+1)+'_'+str(cds_map[map_key]%3)
 					map_key+=1
 			else:
 				if map_key not in cds_map.keys():
@@ -425,7 +425,7 @@ def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_
 							sgrna_trans[n+str(len(sgrna)-i)] = '0_'+label+':-'+str(map_key - int(e[1]))
 					map_key-=1
 				else:
-					sgrna_trans[n+str(len(sgrna)-i)] = str((cds_map[map_key]/3)+1)+'_'+str(cds_map[map_key]%3)
+					sgrna_trans[n+str(len(sgrna)-i)] = str((cds_map[map_key]//3)+1)+'_'+str(cds_map[map_key]%3)
 					map_key -=1
 	return sgrna_trans
 
@@ -443,7 +443,7 @@ def parse_variant_df(variant_df):
 	parsed_variant_df = temp_variant_df.copy()
 	parsed_variant_df.index = range(0,len(parsed_variant_df))
 	parsed_variant_df.rename(columns = {'Start':'ClinVar_SNP_Position'}, inplace=True)
-	parsed_variant_df.loc[:,'RefSeqID'] = parsed_variant_df.loc[:,'Name'].str.split('(',1).str[0]
+	parsed_variant_df.loc[:,'RefSeqID'] = parsed_variant_df.loc[:,'Name'].str.split(pat='(',n=1).str[0]
 	parsed_variant_df = parsed_variant_df[['#AlleleID',
 										   'RefSeqID',
 										   'Name',
@@ -486,7 +486,7 @@ Returns:
 def get_genomic_pos_list(edit_indices, gene_strand, sgrna_strand, sg_gen_pos):
 	edit_gen_pos_list = []
 	codon_pos_list = []
-	for edit_pos,frame in edit_indices.iteritems():
+	for edit_pos,frame in edit_indices.items():
 		# if sgRNA is in + strand
 		if ((gene_strand == 1) and (sgrna_strand == 'sense')) or ((gene_strand == -1) and (sgrna_strand == 'antisense')):
 			edit_gen_pos = (sg_gen_pos+int(edit_pos)-1)
@@ -516,7 +516,7 @@ def get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, gene_variant
 	edit_nuc, edit_to = edit.split('-')
 	all_snps = gene_variant_df['ClinVar_SNP_Position'].tolist()
 	# Iterate through all amino acid changes
-	for k,v in edit_map.iteritems():
+	for k,v in edit_map.items():
 		temp_snp_type_list = []
 		edit_indices = {}
 		edits = k.split('_')
@@ -623,6 +623,7 @@ def get_clinical_sig(snp_type_list):
 	if not snp_type_list:
 		clinical_sig = ''
 	else:
+		snp_type_list = [i for i in snp_type_list if i != "None"]
 		clinical_sig = ';'.join(snp_type_list)
 	return clinical_sig
 
@@ -708,7 +709,7 @@ def get_edits(edit_map, context, window, edit, sgrna_trans, codon_map, j, sgrna_
 									motif_check = True
 								if motif_check:								
 									if aa_num+'_'+str(k) in sgrna_trans.values():
-										nuc_index = sgrna_trans.keys()[sgrna_trans.values().index(aa_num+'_'+str(k))][1:]
+										nuc_index = next(key for key, value in sgrna_trans.items() if value == aa_num + '_' + str(k))[1:]
 										if (int(nuc_index) >= window_start) and (int(nuc_index) <= window_end):
 											new_codon.append(edit_to)
 											nuc_index = nuc_index + '-' + str(k)
@@ -807,7 +808,8 @@ def get_print_edits(edit_map):
 		if '_' in v:
 			vals = v.split('_')
 			aa_edits = aa_edits + vals[0] + ';'
-			cat = cat+vals[1]+';'
+			if vals[1] != None:
+				cat = cat+vals[1]+';'
 			# len(vals) > 2 for coding sequence, <= 2 for non-coding (intron, UTR, flanking)
 			if len(vals) > 2:
 				old_codon = old_codon + vals[2] + ';'
@@ -829,7 +831,7 @@ def get_context_for_trans(ct_index, ct_index_check, abs_pos, cds_map, fs, sgrna_
 	i_count = 0
 	cds_pos = ''
 	while ct_index < ct_index_check:
-		gen_pos = abs_pos.keys()[abs_pos.values().index(ct_index)]
+		gen_pos = next(key for key, value in abs_pos.items() if value == ct_index)
 		if gen_pos in cds_map.keys():
 			if flag == 0: #Check to see if ct_index has encountered CDS
 				cds_pos = cds_map[gen_pos]
@@ -910,8 +912,8 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id,w, gene_seq, abs_pos,
 
 
 				if 'I' in context_for_trans:
-					map_key_context_start = abs_pos.keys()[abs_pos.values().index(pos - 3)]
-					map_key_context_end = abs_pos.keys()[abs_pos.values().index(pos + pam_len + sg_len + 3)]
+					map_key_context_start = next(key for key, value in abs_pos.items() if value == pos - 3)
+					map_key_context_end = next(key for key, value in abs_pos.items() if value == pos + pam_len + sg_len + 3)
 					if map_key_context_start in cds_map.keys():
 						# True if sgRNA is in first coding exon or inner exon, false if in last coding exon
 						if (cds_map[map_key_context_start] + pam_len + sg_len + 7) <= len(cds_sequence):
@@ -943,7 +945,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id,w, gene_seq, abs_pos,
 					w_error.writerow([gene_name, tr, sgrna, sgrna_strand, error])
 
 				if context_for_trans != '':
-					sg_gen_pos = abs_pos.keys()[abs_pos.values().index(sgrna_end_pos)]
+					sg_gen_pos = next((key for key, value in abs_pos.items() if value == sgrna_end_pos))
 					sgrna_trans = get_sgrna_translated_seq(sgrna_for_trans, cds_map, abs_pos, fs, sgrna_start_pos, gene_strand, sgrna_strand, utr, e, label)
 					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, gene_variant_df, aa_map, filter_gc, sgrna_context)
 					if cds_error != '':
@@ -976,8 +978,8 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id,w, gene_seq, abs_pos,
 
 
 				if 'I' in context_for_trans:
-					map_key_context_start = abs_pos.keys()[abs_pos.values().index(pos-4)]
-					map_key_context_end = abs_pos.keys()[abs_pos.values().index(pos + pam_len + sg_len + 3)]
+					map_key_context_start = next(key for key, value in abs_pos.items() if value == pos - 4)
+					map_key_context_end = next(key for key, value in abs_pos.items() if value == pos + pam_len + sg_len + 3)
 					if map_key_context_start in cds_map.keys():
 						if (cds_map[map_key_context_start]+sg_len+pam_len+7) <= len(cds_sequence):
 							context_for_trans = cds_sequence[cds_map[map_key_context_start]:cds_map[map_key_context_start]+sg_len+pam_len+7]
@@ -1004,7 +1006,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id,w, gene_seq, abs_pos,
 					w_error.writerow([gene_name, tr, sgrna, sgrna_strand,error])
 
 				if context_for_trans != '':
-					sg_gen_pos = abs_pos.keys()[abs_pos.values().index(sgrna_start_pos)]
+					sg_gen_pos = next(key for key, value in abs_pos.items() if value == sgrna_start_pos)
 					sgrna_trans = get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_strand, sgrna_strand, utr, e, label)
 					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, gene_variant_df, aa_map, filter_gc, sgrna_context)
 					if cds_error != '':
@@ -1150,8 +1152,8 @@ if __name__ == '__main__':
 						 'Same nucleotide position', 'Same nucleotide change', 'Same amino acid position',
 						 'Same amino acid change'])
 		for i,r in input_df.iterrows():
-			print('Designing for '+r[1])
-			tr = r[0]
+			print('Designing for '+r['ID'])
+			tr = r['Sequence']
 			if input_type == 'tid':
 				gene_name, assembly, gene_strand, chromosome, gene_id, exons, cds_map, abs_pos_map, fs, utr, cds_start_exon, utr5_flag, utr3_flag = get_tr_info(tr, input_type)
 				if exons == '':
@@ -1190,14 +1192,14 @@ if __name__ == '__main__':
 					continue
 				gene_variant_df = parsed_variant_df[parsed_variant_df.GeneSymbol == gene_name]
 			elif input_type == 'nuc':
-				tr_seq = r[0]
+				tr_seq = r["Sequence"]
 				seq_error = check_sequences(tr_seq)
 				if seq_error != '':
 					print(seq_error)
-					w_error.writerow([r[1], r[1], 'N/A', 'N/A', seq_error])
+					w_error.writerow([r["ID"], r["ID"], 'N/A', 'N/A', seq_error])
 					continue
-				gene_name, assembly, chromosome, gene_id,gene_start, gene_end, gene_strand, tr = r[1], '', '', '',0, len(tr_seq), 1, r[1]
-				exons, cds_sequence = get_seq_info(r[0])
+				gene_name, assembly, chromosome, gene_id,gene_start, gene_end, gene_strand, tr = r["ID"], '', '', '',0, len(tr_seq), 1, r["ID"]
+				exons, cds_sequence = get_seq_info(r["Sequence"])
 				pro_sequence = get_seq_pro(cds_sequence, codon_map)
 				abs_pos_map, fs = get_absolute_pos(gene_start, gene_end, gene_strand, input_type)
 				cds_map = get_cds_map(exons, gene_strand)
