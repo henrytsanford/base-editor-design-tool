@@ -1,2 +1,4 @@
-pandas >= 0.16.1
-biopython >=1.72
+python==3.13
+pandas
+biopython
+requests
