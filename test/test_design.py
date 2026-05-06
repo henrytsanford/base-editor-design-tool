@@ -1,9 +1,8 @@
-import pytest
 import subprocess
 import shutil
 import os
 import pandas as pd
-from base_editing_guide_designs import get_aa_map, parse_variant_df
+from base_editing_guide_designs import get_aa_map
 
 SAMPLE_DATA_DIR = "Sample_data"
 
