@@ -441,9 +441,11 @@ def parse_variant_df(variant_df):
 								& (variant_df.Chromosome != 'na')
 								& (variant_df.ReferenceAllele != 'na')]
 	parsed_variant_df = temp_variant_df.copy()
-	parsed_variant_df.index = range(0,len(parsed_variant_df))
-	parsed_variant_df.rename(columns = {'Start':'ClinVar_SNP_Position'}, inplace=True)
-	parsed_variant_df.loc[:,'RefSeqID'] = parsed_variant_df.loc[:,'Name'].str.split(pat='(',n=1).str[0]
+	parsed_variant_df = parsed_variant_df.reset_index(drop=True)
+	parsed_variant_df = parsed_variant_df.rename(columns={'Start': 'ClinVar_SNP_Position'})
+	parsed_variant_df = parsed_variant_df.assign(
+    RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
+	)
 	parsed_variant_df = parsed_variant_df[['#AlleleID',
 										   'RefSeqID',
 										   'Name',
@@ -1152,8 +1154,8 @@ if __name__ == '__main__':
 						 'Same nucleotide position', 'Same nucleotide change', 'Same amino acid position',
 						 'Same amino acid change'])
 		for i,r in input_df.iterrows():
-			print('Designing for '+r['ID'])
-			tr = r['Sequence']
+			print('Designing for '+r.iloc[1])
+			tr = r.iloc[0]
 			if input_type == 'tid':
 				gene_name, assembly, gene_strand, chromosome, gene_id, exons, cds_map, abs_pos_map, fs, utr, cds_start_exon, utr5_flag, utr3_flag = get_tr_info(tr, input_type)
 				if exons == '':
@@ -1192,14 +1194,14 @@ if __name__ == '__main__':
 					continue
 				gene_variant_df = parsed_variant_df[parsed_variant_df.GeneSymbol == gene_name]
 			elif input_type == 'nuc':
-				tr_seq = r["Sequence"]
+				tr_seq = r.iloc[0]
 				seq_error = check_sequences(tr_seq)
 				if seq_error != '':
 					print(seq_error)
-					w_error.writerow([r["ID"], r["ID"], 'N/A', 'N/A', seq_error])
+					w_error.writerow([r.iloc[1], r.iloc[1], 'N/A', 'N/A', seq_error])
 					continue
-				gene_name, assembly, chromosome, gene_id,gene_start, gene_end, gene_strand, tr = r["ID"], '', '', '',0, len(tr_seq), 1, r["ID"]
-				exons, cds_sequence = get_seq_info(r["Sequence"])
+				gene_name, assembly, chromosome, gene_id,gene_start, gene_end, gene_strand, tr = r.iloc[1], '', '', '',0, len(tr_seq), 1, r.iloc[1]
+				exons, cds_sequence = get_seq_info(r.iloc[0])
 				pro_sequence = get_seq_pro(cds_sequence, codon_map)
 				abs_pos_map, fs = get_absolute_pos(gene_start, gene_end, gene_strand, input_type)
 				cds_map = get_cds_map(exons, gene_strand)
