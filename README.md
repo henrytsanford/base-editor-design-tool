@@ -51,5 +51,5 @@ You don't need this to design guides. Skip this unless you're changing the code.
 
     pytest test/
 
-Both tests need `variant_summary.txt` in the repository directory, and the
-transcript-ID test queries the Ensembl REST API, so it needs network access.
+Needs `variant_summary.txt` in the repository directory. A second test queries the
+Ensembl REST API and is skipped by default: `ENSEMBL_TESTS=1 pytest test/`.

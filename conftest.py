@@ -1,2 +1,1 @@
-# Present so pytest puts the repository root on sys.path, making
-# base_editing_guide_designs importable from test/.
+# Puts the repository root on sys.path so test/ can import the script.

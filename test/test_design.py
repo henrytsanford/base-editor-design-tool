@@ -3,6 +3,7 @@ import shutil
 import os
 import sys
 import pandas as pd
+import pytest
 from base_editing_guide_designs import get_aa_map
 
 SAMPLE_DATA_DIR = "Sample_data"
@@ -95,6 +96,10 @@ def test_fasta_input():
             shutil.rmtree(output_dir)
 
 
+@pytest.mark.skipif(
+    not os.environ.get("ENSEMBL_TESTS"),
+    reason="queries the Ensembl REST API; set ENSEMBL_TESTS=1 to run",
+)
 def test_tid_input():
     output_name = "sample"
     cmd = format_args(f"{SAMPLE_DATA_DIR}/sample_input.txt", "tid", output_name)
