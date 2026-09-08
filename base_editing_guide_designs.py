@@ -455,7 +455,7 @@ def parse_variant_df(variant_df):
 	parsed_variant_df = parsed_variant_df.reset_index(drop=True)
 	parsed_variant_df = parsed_variant_df.rename(columns={'Start': 'ClinVar_SNP_Position'})
 	parsed_variant_df = parsed_variant_df.assign(
-    RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
+		RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
 	)
 	parsed_variant_df = parsed_variant_df[['#AlleleID',
 										   'RefSeqID',
