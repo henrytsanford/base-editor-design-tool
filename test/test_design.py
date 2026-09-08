@@ -1,6 +1,7 @@
 import subprocess
 import shutil
 import os
+import sys
 import pandas as pd
 from base_editing_guide_designs import get_aa_map
 
@@ -9,7 +10,7 @@ SAMPLE_DATA_DIR = "Sample_data"
 
 def format_args(input_file, input_type, output_name):
     cmd = [
-        "python",
+        sys.executable,
         "base_editing_guide_designs.py",
         "--input-file",
         input_file,

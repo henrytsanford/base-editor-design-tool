@@ -1,6 +1,17 @@
+import sys
+
+# NB: keep this block parseable by Python 2 so it can report the version
+# instead of dying with a SyntaxError. No f-strings here.
+if sys.version_info < (3, 9):
+	sys.exit(
+		"This tool requires Python 3.9 or newer (tested on 3.13); you are "
+		"running %s.\nSee the README for setup instructions."
+		% sys.version.split()[0]
+	)
+
 import pandas as pd
 import csv, argparse, re
-import requests, sys, os
+import requests, os
 from datetime import datetime
 from Bio import SeqIO
 
@@ -625,7 +636,6 @@ def get_clinical_sig(snp_type_list):
 	if not snp_type_list:
 		clinical_sig = ''
 	else:
-		snp_type_list = [i for i in snp_type_list if i != "None"]
 		clinical_sig = ';'.join(snp_type_list)
 	return clinical_sig
 
@@ -810,8 +820,7 @@ def get_print_edits(edit_map):
 		if '_' in v:
 			vals = v.split('_')
 			aa_edits = aa_edits + vals[0] + ';'
-			if vals[1] != None:
-				cat = cat+vals[1]+';'
+			cat = cat+vals[1]+';'
 			# len(vals) > 2 for coding sequence, <= 2 for non-coding (intron, UTR, flanking)
 			if len(vals) > 2:
 				old_codon = old_codon + vals[2] + ';'

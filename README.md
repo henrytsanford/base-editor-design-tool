@@ -19,3 +19,37 @@ FASTA file with nucleotide sequence
 10. <b>Filter GC</b>: Whether to filter out edits in a GC motif.
 11. <b>Output name</b>: Name for output folder.
 
+
+## Requirements
+
+Python 3.9 or newer (tested on 3.13).
+
+## Setup
+
+    git clone https://github.com/mhegde/base-editor-design-tool.git
+    cd base-editor-design-tool
+    pip install -r requirements.txt
+
+Download the ClinVar variant file into the repository directory:
+
+    curl -O https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
+    gunzip variant_summary.txt.gz
+
+## Example
+
+    python base_editing_guide_designs.py \
+        --input-file Sample_data/GFP.fasta \
+        --input-type nuc \
+        --edit C-T \
+        --output-name GFP
+
+Results are written to `GFP_<timestamp>/`.
+
+## Tests (developers only)
+
+You don't need this to design guides. Skip this unless you're changing the code.
+
+    pytest test/
+
+Both tests need `variant_summary.txt` in the repository directory, and the
+transcript-ID test queries the Ensembl REST API, so it needs network access.
