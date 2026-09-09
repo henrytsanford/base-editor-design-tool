@@ -12,6 +12,7 @@ if sys.version_info < (3, 9):
 import pandas as pd
 import csv, argparse, re
 import requests, os
+import contextlib, random, time
 from datetime import datetime
 from Bio import SeqIO
 
@@ -70,6 +71,15 @@ def revcom(s):
 	return ''.join(letters)
 
 
+'''
+Ensembl's REST API rejects versioned transcript IDs (ENST00000294952.13 returns
+HTTP 400), so drop the suffix. Also trims stray whitespace, which spreadsheet
+exports tend to leave behind.
+'''
+def strip_tr_version(tr):
+	return re.sub(r'^(ENS[A-Z]*[GTP]\d+)\.\d+$', r'\1', str(tr).strip())
+
+
 def get_aa_map():
 	aa_map = {'Phe': 'F', 'Leu': 'L', 'Ile': 'I', 'Met': 'M', 'Val': 'V', 'Ser': 'S', 'Pro': 'P', 'Thr': 'T',
 			  'Ala': 'A', 'Tyr': 'Y', 'Ter': 'Ter', 'His': 'H', 'Gln': 'Q', 'Asn': 'N', 'Lys': 'K', 'Asp': 'D',
@@ -126,17 +136,89 @@ def check_ressite_4t(sg):
 	return res_flag, t4_flag
 
 
+ENSEMBL_SERVER = "https://rest.ensembl.org"
+ENSEMBL_ATTEMPTS = 7
+ENSEMBL_TIMEOUT = 90
+ENSEMBL_MAX_BACKOFF = 60
+_session = requests.Session()
+
+
+class EnsemblUnavailable(Exception):
+	pass
+
+
+'''
+GETs an Ensembl REST endpoint, retrying transient failures. rest.ensembl.org
+regularly returns 500/503 under load and a healthy response can take 20s, so a
+single unretried request with no timeout is not enough to finish a run. Failures
+arrive in correlated bursts (five consecutive 500s observed), and a transcript needs
+five sequential calls, hence the generous attempt budget.
+Non-retryable responses (including 4xx) are returned so callers can decide what
+they mean; a persistent outage raises EnsemblUnavailable.
+'''
+def ensembl_get(ext, headers, attempts=ENSEMBL_ATTEMPTS, timeout=ENSEMBL_TIMEOUT):
+	last = None
+	for attempt in range(1, attempts + 1):
+		try:
+			r = _session.get(ENSEMBL_SERVER + ext, headers=headers, timeout=timeout)
+		except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+			last = type(e).__name__
+			retry_after = None
+		else:
+			if r.status_code != 429 and r.status_code < 500:
+				return r
+			last = 'HTTP ' + str(r.status_code)
+			retry_after = r.headers.get('Retry-After')
+		if attempt == attempts:
+			break
+		if retry_after:
+			try:
+				delay = float(retry_after)
+			except ValueError:
+				delay = 2 ** attempt
+		else:
+			delay = 2 ** attempt + random.uniform(0, 1)
+		# cap the wait even if Retry-After asks for something absurd
+		delay = min(delay, ENSEMBL_MAX_BACKOFF)
+		print('Ensembl request failed (%s), retrying in %.0fs (attempt %d of %d)'
+			  % (last, delay, attempt + 1, attempts))
+		time.sleep(delay)
+	raise EnsemblUnavailable(
+		"Ensembl REST API is unavailable: %s after %d attempts for %s"
+		% (last, attempts, ext)
+	)
+
+
+'''
+Reports an Ensembl outage as a readable message instead of a traceback. Used as a
+context manager so the run's output files are closed before exiting.
+'''
+@contextlib.contextmanager
+def ensembl_outage_guard(output_folder):
+	try:
+		yield
+	except EnsemblUnavailable as e:
+		sys.exit(
+			"%s\n"
+			"The Ensembl REST API is not responding; this is usually a temporary "
+			"outage on their end. Check https://rest.ensembl.org/info/ping and re-run "
+			"later. Partial output remains in %s." % (e, output_folder)
+		)
+
+
 '''
 Returns information about gene, assembly, chromosome of specified Ensembl transcript; Also returns absolute values for gene with respect to
 genomic locations; Flags genes for absence of UTRs;
 '''
 def get_tr_info(tr, input_type):
-	server = "https://rest.ensembl.org"
-	ext = "/lookup/id/"+tr+"?expand=1"
-	r = requests.get(server+ext, headers={ "Content-Type" : "application/json"})
+	r = ensembl_get("/lookup/id/"+tr+"?expand=1", { "Content-Type" : "application/json"})
 	if not r.ok:
-		r.raise_for_status()
-		sys.exit("Transcript not found")
+		sys.exit(
+			"Transcript '%s' not found in Ensembl (HTTP %d).\n"
+			"Check the ID at https://www.ensembl.org; it should be a bare transcript "
+			"ID such as ENST00000294952 (version suffixes like .13 are stripped "
+			"automatically)." % (tr, r.status_code)
+		)
 	tr_info = r.json()
 	gene_name = tr_info['display_name'].rsplit('-', 1)[0]
 	assembly = tr_info['assembly_name']
@@ -167,11 +249,10 @@ Returns exon boundaries for transcript;Also returns absolute values for gene wit
 genomic locations
 '''
 def get_exons(tr, length, gene_start, gene_strand):
-	server = "https://rest.ensembl.org"
-	ext = "/map/cds/"+tr+"/1.."+str(length)+"?"
-	r = requests.get(server+ext, headers={ "Content-Type" : "application/json"})
+	r = ensembl_get("/map/cds/"+tr+"/1.."+str(length)+"?", { "Content-Type" : "application/json"})
 	if not r.ok:
-		#sys.exit()
+		# A 4xx here means the transcript has no CDS mapping (e.g. non-coding);
+		# service failures are retried and raised by ensembl_get.
 		return '',''
 	decoded = r.json()
 	exons_all = decoded['mappings']
@@ -333,11 +414,8 @@ def get_cds_map(exons, gene_strand):
 Returns sequence of transcript along with 5' and 3' UTR
 '''
 def get_tr_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;expand_5prime=40;expand_3prime=40"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
+	r = ensembl_get("/sequence/id/"+tr+"?content-type=text/plain;expand_5prime=40;expand_3prime=40", { "Content-Type" : "text/plain"})
 	if not r.ok:
-		r.raise_for_status()
 		return ''
 	sequence = r.text
 	return sequence
@@ -346,11 +424,8 @@ def get_tr_sequence(tr):
 Returns protein sequence of transcript
 '''
 def get_pro_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;type=protein"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
+	r = ensembl_get("/sequence/id/"+tr+"?content-type=text/plain;type=protein", { "Content-Type" : "text/plain"})
 	if not r.ok:
-		r.raise_for_status()
 		return ''
 	pro_sequence = r.text
 	return pro_sequence
@@ -359,11 +434,8 @@ def get_pro_sequence(tr):
 Returns CDS sequence of transcript
 '''
 def get_cds_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;type=cds"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
+	r = ensembl_get("/sequence/id/"+tr+"?content-type=text/plain;type=cds", { "Content-Type" : "text/plain"})
 	if not r.ok:
-		r.raise_for_status()
 		return ''
 	cds_sequence = r.text
 	return cds_sequence
@@ -1091,6 +1163,7 @@ def read_args(args):
 		filter_gc = False
 	if input_type == 'tid':
 		input_df = pd.read_table(args.input_file)
+		input_df.iloc[:, 0] = input_df.iloc[:, 0].map(strip_tr_version)
 	else:
 		input_df = pd.DataFrame(columns=['Sequence', 'ID'])
 		fasta_seqs = SeqIO.parse(open(args.input_file), 'fasta')
@@ -1145,7 +1218,7 @@ if __name__ == '__main__':
 	input_type, input_file, input_df, pam, window, sg_len, edit, parsed_variant_df, variant_file, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc = read_args(args)
 	write_readme(output_folder, input_file, pam, window, edit, variant_file, intron_buffer, filter_gc)
 
-	with open(output_folder+'/sgrna_designs_'+output_name+'.txt','w') as o_sgrna, open(output_folder + '/error_report.txt', 'w') as o_error, open(output_folder+'/clinvar_annotations_'+output_name+'.txt','w') as o_clin:
+	with ensembl_outage_guard(output_folder), open(output_folder+'/sgrna_designs_'+output_name+'.txt','w') as o_sgrna, open(output_folder + '/error_report.txt', 'w') as o_error, open(output_folder+'/clinvar_annotations_'+output_name+'.txt','w') as o_clin:
 		w_error = csv.writer(o_error,delimiter='\t')
 		w_error.writerow(['Gene Symbol','Ensembl transcript ID','sgRNA','sgRNA Strand','Error'])
 		w = csv.writer(o_sgrna,delimiter='\t')

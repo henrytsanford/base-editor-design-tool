@@ -45,6 +45,22 @@ Download the ClinVar variant file into the repository directory:
 
 Results are written to `GFP_<timestamp>/`.
 
+## Troubleshooting
+
+**`Ensembl REST API is unavailable`** — `rest.ensembl.org` returns 500/503 under load.
+Requests are retried five times with exponential backoff, so this message means the
+service is genuinely down rather than blipping. Check
+<https://rest.ensembl.org/info/ping> and re-run later; partial output is left in the
+output folder.
+
+**Transcript version suffixes** — Ensembl rejects versioned IDs
+(`/lookup/id/ENST00000294952.13` returns HTTP 400), so a trailing `.13` is now stripped
+from input files automatically. Bare IDs are still preferred.
+
+**`Transcript '...' not found in Ensembl`** — the ID itself is not recognised. Check it
+at <https://www.ensembl.org>; unless you are targeting a specific isoform, use the
+transcript flagged "Ensembl Canonical".
+
 ## Tests (developers only)
 
 You don't need this to design guides. Skip this unless you're changing the code.
