@@ -18,3 +18,6 @@ variant_summary.txt
 # Timestamped run output (<output-name>_yy-mm-dd-HH-MM-SS/)
 *_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
 
+# Local Ensembl reference bundle (built by tools/build_reference.py)
+refdata/
+docs/web-service-design.md

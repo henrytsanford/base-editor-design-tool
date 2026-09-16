@@ -1,4 +1,5 @@
 pandas >= 2.0
-biopython >= 1.72
+biopython >= 1.73
 requests
 pytest
+pyfaidx >= 0.7
