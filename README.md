@@ -89,7 +89,9 @@ even while data endpoints fail.
 (version suffixes such as `.13` are stripped automatically). With `--source local`, the
 ID may also be retired in, or newer than, the bundle's Ensembl release.
 
-## Tests (developers only)
+## Developers only
+
+### Tests
 
     pytest test/
 
@@ -97,3 +99,33 @@ Tests that query the Ensembl REST API run only with `ENSEMBL_TESTS=1`, and tests
 need the local bundle skip until it is built. `test/test_local_source.py` checks that the
 bundle and the REST API agree on a panel of transcripts covering strand, exon count,
 missing UTRs and non-coding transcripts.
+
+`test/test_golden.py` compares whole output files against frozen fixtures in
+`test/golden/`, over a panel chosen to reach every structural case: both strands, a
+single-exon transcript, one with no UTR, a non-coding one, and FASTA input. After an
+intentional change to the output, rewrite them and review the diff:
+
+    pytest test/test_golden.py --regenerate-golden
+
+### Using the design engine from Python
+
+The engine is importable, so it can be used without the command line:
+
+```python
+from bedesign import design_transcript, DesignParams
+from bedesign.transcript_source import (ClinVarSource, LocalSource,
+                                        find_bundle, find_clinvar_db)
+
+source = LocalSource(find_bundle('refdata'))
+clinvar = ClinVarSource(find_clinvar_db(None, 'refdata'))
+
+designs, errors, annotations = design_transcript(
+    source, clinvar, 'ENST00000307102', DesignParams(edit='all'))
+```
+
+The three returned lists are rows under `DESIGN_COLUMNS`, `ERROR_COLUMNS` and
+`ANNOTATION_COLUMNS` — the same content the CLI writes to its three files. Pass
+`clinvar=None` to skip annotation, `DesignParams.from_preset('ABE7.10')` to use a base
+editor by name (it raises `ValueError` for an unknown one), and `design_sequence(name,
+sequence, params)` for raw nucleotide input. Nothing is held in module state, so a
+caller can keep several sources open at once.

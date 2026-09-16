@@ -29,7 +29,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from transcript_source import VARIANT_COLUMNS, VARIANT_TABLE
+from bedesign.transcript_source import VARIANT_COLUMNS, VARIANT_TABLE
 
 SOURCE_URL = ('https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/'
               'variant_summary.txt.gz')

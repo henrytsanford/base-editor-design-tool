@@ -12,7 +12,7 @@ Opt in, because it queries the live REST API and needs a built bundle:
 """
 import pytest
 
-import transcript_source as ts
+import bedesign.transcript_source as ts
 
 pytestmark = [pytest.mark.ensembl, pytest.mark.bundle]
 
