@@ -9,7 +9,7 @@ amino-acid consequence of each edit and any ClinVar variant the edit would recre
 <form method="get" action="/genes" class="card">
   <div class="field">
     <label for="q">Gene symbol</label>
-    <input id="q" name="q" value="{{ symbol|default('') }}" required
+    <input id="q" name="q" required
            maxlength="32" autofocus placeholder="MAP2K1" autocomplete="off"
            spellcheck="false">
     <p class="muted">You pick the transcript on the next page. MANE Select is listed
@@ -20,7 +20,7 @@ amino-acid consequence of each edit and any ClinVar variant the edit would recre
     <label for="preset">Base editor</label>
     <select id="preset" name="preset">
       {% for preset in presets %}
-      <option value="{{ preset.name }}"{{ ' selected' if preset.name == 'ABE7.10' else '' }}>
+      <option value="{{ preset.name }}"{{ ' selected' if preset.name == default_preset else '' }}>
         {{ preset.name }} &middot; {{ preset.pam }} &middot; window {{ preset.window }}
         &middot; {{ preset.edit }}
       </option>

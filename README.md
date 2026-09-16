@@ -10,11 +10,11 @@ user-defined transcripts. It then annotates the possible edits for each guide. S
 FASTA file with nucleotide sequence
 2. <b>ClinVar database</b>: ClinVar SNPs, as a database built by <code>tools/build_clinvar.py</code>; Default: the newest <code>clinvar-&lt;date&gt;.db</code> under <code>--refdata</code>. Pass <code>--no-clinvar</code> to skip the annotation.
 3. <b>Input type</b>: Indicate whether the file contains a list of transcripts or a nucleotide sequence.
-4. <b>Base editor type</b>: Indicate the type of base editor (Rees et al.,2018) for which designs are required. This choice dictates the choice of PAM, sgRNA length, editing window and type of edit.
-5. <b>PAM</b>: PAM preference if BE type has not been selected; Default: NGG.
+4. <b>Base editor type</b>: Indicate the type of base editor (the Rees et al., 2018 panel plus <code>ABE8e-SpRY</code>) for which designs are required. This choice dictates the choice of PAM, sgRNA length, editing window and type of edit. Leaving it unset designs for <code>ABE8e-SpRY</code>, which is what parameters 5-8 default to.
+5. <b>PAM</b>: PAM preference if BE type has not been selected; Default: NNN.
 6. <b>Edit window</b>: Editing window relative to nucleotide position in sgRNA, if BE type has not been selected; Default: 4-8.
 7. <b>sgRNA length</b>: Length of sgRNA excluding PAM sequence, if BE type has not been selected; Default:20.
-8. <b>Edit</b>: Type of edit made by base editor, if BE type has not been selected; Default: all, annotates for both C->T and A->G edit.
+8. <b>Edit</b>: Type of edit made by base editor, if BE type has not been selected; Default: A-G. Pass <code>all</code> to annotate both C->T and A->G edits.
 9. <b>Intron buffer</b>: Number of bp into the intron to consider for guide design.
 10. <b>Filter GC</b>: Whether to filter out edits in a GC motif.
 11. <b>Output name</b>: Name for output folder.

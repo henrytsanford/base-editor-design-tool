@@ -78,6 +78,20 @@ class References(object):
             (prefix, prefix + '\uffff', limit)).fetchall()
         return [row[0] for row in rows]
 
+    def resolve_gene(self, symbol):
+        """The gene a symbol names, and every symbol it could have named.
+
+        An exact hit wins over a prefix list, and a prefix that can only mean one gene
+        resolves too, so searching 'MAP2K1' does not stop to ask which MAP2K1. An
+        empty gene means the caller should show the matches and let the user choose.
+        """
+        matches = self.search_genes(symbol)
+        if symbol in matches:
+            return symbol, matches
+        if len(matches) == 1:
+            return matches[0], matches
+        return '', matches
+
     def transcripts_for_gene(self, gene_name, limit=TRANSCRIPT_LIMIT):
         """Every transcript of a gene, best choice first.
 

@@ -4,12 +4,10 @@ Offline: the golden MAP2K1 designs file is a real engine output with 560 guides,
 both strands, ClinVar matches and multi-edit guides, which is everything the table
 has to cope with. No bundle and no HTTP.
 """
-import gzip
-import io
-
 import pytest
 
 from bedesign import DESIGN_COLUMNS
+from service.jobs import _tsv_gz
 from service.params import TableView
 from service.results import (ANY_MATCH, ROWS_PER_PAGE, ResultCache, ResultTable,
                              UnknownFilterValue)
@@ -30,14 +28,8 @@ def table(raw):
 
 def tsv_gz(rows):
     """A designs file with the real header and the given rows."""
-    raw = io.BytesIO()
-    with gzip.GzipFile(fileobj=raw, mode='wb', mtime=0) as gz:
-        lines = ['\t'.join(DESIGN_COLUMNS)]
-        for row in rows:
-            padded = list(row) + [''] * (len(DESIGN_COLUMNS) - len(row))
-            lines.append('\t'.join(padded))
-        gz.write(('\n'.join(lines) + '\n').encode('utf-8'))
-    return raw.getvalue()
+    padded = [list(row) + [''] * (len(DESIGN_COLUMNS) - len(row)) for row in rows]
+    return _tsv_gz(DESIGN_COLUMNS, padded)
 
 
 def test_every_cell_survives_parsing_as_written(table):

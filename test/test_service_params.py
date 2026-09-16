@@ -6,6 +6,7 @@ parsing rules rather than the reference data.
 import pytest
 from starlette.datastructures import QueryParams
 
+from bedesign.engine import DEFAULT_BE_TYPE
 from service.params import (DESIGN_PARAMS, VIEW_PARAMS, ValidationError,
                             parse_designs_query, parse_download_query,
                             parse_genes_query, parse_view_query)
@@ -21,7 +22,14 @@ def test_bare_transcript_uses_the_engine_defaults():
     transcript, params = parse('transcript=' + KNOWN)
     assert transcript == KNOWN
     assert (params.pam, params.window, params.sg_len, params.edit) == \
-        ('NGG', '4-8', 20, 'all')
+        ('NNN', '4-8', 20, 'A-G')
+
+
+def test_the_default_editor_is_the_one_the_form_preselects():
+    """A request that names no editor and one that names the default agree."""
+    _, params = parse('transcript=' + KNOWN)
+    _, named = parse('transcript=%s&preset=%s' % (KNOWN, DEFAULT_BE_TYPE))
+    assert params == named
 
 
 def test_preset_resolves_through_the_engine_table():

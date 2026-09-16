@@ -14,6 +14,7 @@ A request has two halves. Only the design half reaches the cache key, so filteri
 table re-renders a cached result instead of computing a new one.
 """
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -25,15 +26,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
-from bedesign.engine import ALL_EDITS, BE_TYPES, DesignParams
+from bedesign.engine import ALL_EDITS, BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
 from .cachekey import RESULT_FILES, cache_key, manifest_key, result_key
 from .config import Settings
 from .jobs import JobPool, PoolBusy
-from .params import (DESIGN_PARAMS, EDITOR_ALL, EDITS, INTRON_BUFFER_RANGE,
-                     SG_LEN_RANGE, STRANDS, VIEW_PARAMS, ValidationError,
-                     parse_designs_query, parse_download_query, parse_genes_query,
-                     parse_view_query)
+from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PARAMS,
+                     INTRON_BUFFER_RANGE, SG_LEN_RANGE, STRANDS, VIEW_PARAMS,
+                     ValidationError, parse_designs_query, parse_download_query,
+                     parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
 from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
@@ -49,7 +50,6 @@ POLL_SECONDS = 3
 # The order parameters appear in a URL we build. Fixed, so the same view always has
 # the same link and two people comparing URLs see the same string.
 DESIGNS_ORDER = DESIGN_PARAMS + VIEW_PARAMS
-DOWNLOAD_ORDER = DESIGN_PARAMS + ('file',)
 
 # No script-src at all. Nothing in the app needs JavaScript: the running page uses a
 # meta refresh, and the table's filters, sort and paging are links and a GET form.
@@ -67,9 +67,8 @@ ROBOTS = 'User-agent: *\nDisallow: /\n'
 
 # The preset dropdown, read from the engine's own table so it cannot offer an editor
 # the validator would then refuse.
-PRESETS = [dict(zip(('name', 'pam', 'window', 'sg_len', 'edit'),
-                    (name,) + tuple(spec.split('_'))))
-           for name, spec in BE_TYPES.items()]
+PRESETS = [dict(dataclasses.asdict(DesignParams.from_preset(name)), name=name)
+           for name in BE_TYPES]
 
 
 def scrub(value):
@@ -162,7 +161,7 @@ def create_app(settings=None):
     def search(request: Request):
         """The search page. A plain GET form, so it needs no script and no session."""
         return page(request, 'search.html', presets=PRESETS, defaults=DesignParams(),
-                    edits=EDITS, strands=STRANDS,
+                    default_preset=DEFAULT_BE_TYPE, edits=EDITS,
                     sg_len_range=SG_LEN_RANGE,
                     intron_buffer_range=INTRON_BUFFER_RANGE)
 
@@ -180,11 +179,7 @@ def create_app(settings=None):
             return bad_request(request, str(e))
 
         references = app.state.references
-        matches = references.search_genes(symbol)
-        # An exact hit wins over a prefix list, and a prefix that can only mean one
-        # gene resolves too, so searching 'MAP2K1' does not stop to ask which MAP2K1.
-        gene = symbol if symbol in matches else (matches[0] if len(matches) == 1
-                                                 else '')
+        gene, matches = references.resolve_gene(symbol)
         transcripts = references.transcripts_for_gene(gene) if gene else []
 
         values = values_of(request.query_params)
@@ -192,7 +187,7 @@ def create_app(settings=None):
             transcript['url'] = build_url('/designs', values, DESIGN_PARAMS,
                                           transcript=transcript['transcript_id'])
         others = [{'name': name,
-                   'url': build_url('/genes', values, ('q',) + DESIGN_PARAMS, q=name)}
+                   'url': build_url('/genes', values, GENE_PARAMS, q=name)}
                   for name in matches if name != gene]
 
         return page(request, 'genes.html', symbol=symbol, gene=gene,
@@ -242,7 +237,7 @@ def create_app(settings=None):
             if started:
                 log.info('started %s for %s', key[:12], scrub(transcript_id))
 
-        return page(request, 'running.html', transcript_id=transcript_id, key=key)
+        return page(request, 'running.html', transcript_id=transcript_id)
 
     @app.get('/designs/download')
     def download(request: Request):
@@ -293,34 +288,33 @@ def create_app(settings=None):
 
         columns = []
         for column in table.columns:
-            descending = view.sort == column and view.dir != 'desc'
+            current = view.dir if view.sort == column else ''
             columns.append({
                 'name': column,
-                'url': designs_url(sort=column, dir='desc' if descending else 'asc'),
-                'sorted': 'desc' if view.sort == column and view.dir == 'desc'
-                          else ('asc' if view.sort == column else ''),
+                # Clicking the column already sorted ascending reverses it.
+                'url': designs_url(sort=column,
+                                   dir='desc' if current == 'asc' else 'asc'),
+                'sorted': current,
             })
 
         pager = {
-            'first': designs_url() if result.page > 1 else '',
-            'previous': build_url('/designs', values, DESIGNS_ORDER,
-                                  page=result.page - 1 if result.page > 2 else None)
+            'previous': designs_url(page=result.page - 1 if result.page > 2 else None)
                         if result.page > 1 else '',
-            'next': build_url('/designs', values, DESIGNS_ORDER, page=result.page + 1)
+            'next': designs_url(page=result.page + 1)
                     if result.page < result.pages else '',
         }
 
         return page(
             request, 'table.html', transcript_id=transcript_id, params=params,
-            view=view, key=key, columns=columns, result=result,
+            view=view, columns=columns, result=result,
             total=manifest.get('designs', table.total), facets=table.facets(),
             any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
             hidden=[(name, values[name]) for name in DESIGN_PARAMS + ('sort', 'dir')
                     if values.get(name)],
-            downloads=[(name, build_url('/designs/download', values, DOWNLOAD_ORDER,
+            downloads=[(name, build_url('/designs/download', values, DOWNLOAD_PARAMS,
                                         file=name))
-                       for name in ('designs', 'errors', 'clinvar')])
+                       for name in RESULT_FILES])
 
     return app
 

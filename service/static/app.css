@@ -5,6 +5,9 @@ body { margin: 0; background: var(--bg); color: var(--fg);
 header { border-bottom: 1px solid var(--line); padding: 12px 20px; }
 header a { color: var(--fg); text-decoration: none; font-weight: 600; }
 main { padding: 20px; }
+footer { border-top: 1px solid var(--line); padding: 12px 20px;
+         color: var(--muted); font-size: 13px; }
+footer a { color: inherit; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 p { margin: 6px 0; }
 .muted { color: var(--muted); font-size: 13px; }

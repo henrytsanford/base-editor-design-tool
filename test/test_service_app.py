@@ -17,6 +17,7 @@ pytestmark = pytest.mark.bundle
 
 ISY1 = 'ENST00000393295'
 MAP2K1 = 'ENST00000307102'
+DESIGNS_URL = '/designs?transcript=%s&preset=ABE7.10' % ISY1
 
 
 @pytest.fixture
@@ -37,6 +38,13 @@ def wait_for_table(client, url, seconds=90):
             return response
         time.sleep(0.5)
     raise AssertionError('design did not finish within %ds' % seconds)
+
+
+@pytest.fixture
+def cached_url(client):
+    """A finished design, for the tests that are about reading one back."""
+    wait_for_table(client, DESIGNS_URL)
+    return DESIGNS_URL
 
 
 def test_healthz_reports_the_engine_version(client):
@@ -76,10 +84,9 @@ def test_a_design_runs_and_renders_its_guides(client):
     assert re.search(r'\d+ guides?\.', response.text)
 
 
-def test_the_second_request_is_served_from_the_cache(client, tmp_path):
+def test_the_second_request_is_served_from_the_cache(client, cached_url, tmp_path):
     """Requesting an uncached result twice runs it once (the M1 criterion)."""
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
+    url = cached_url
     manifests = list((tmp_path / 'results').rglob('manifest.json'))
     assert len(manifests) == 1
     first = manifests[0].read_text()
@@ -217,6 +224,14 @@ def test_the_preset_list_comes_from_the_engine(client):
         assert 'value="%s"' % name in body
 
 
+def test_the_form_preselects_the_default_editor(client):
+    """An untouched form submits the same editor a bare /designs URL would run."""
+    from bedesign.engine import DEFAULT_BE_TYPE
+    body = client.get('/').text
+    assert 'value="%s" selected' % DEFAULT_BE_TYPE in body
+    assert body.count(' selected') == 1
+
+
 def test_a_gene_prefix_lists_the_genes_it_could_mean(client):
     response = client.get('/genes?q=MAP2K')
     assert response.status_code == 200
@@ -253,10 +268,9 @@ def test_no_page_in_the_app_needs_javascript(client):
         assert "script-src 'none'" in response.headers['content-security-policy']
 
 
-def test_filtering_a_cached_table_does_not_start_a_job(client, tmp_path):
+def test_filtering_a_cached_table_does_not_start_a_job(client, cached_url, tmp_path):
     """A filter is a view of a result, not a different result (design doc 3.1)."""
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
+    url = cached_url
     manifests = list((tmp_path / 'results').rglob('manifest.json'))
     assert len(manifests) == 1
 
@@ -270,32 +284,27 @@ def test_filtering_a_cached_table_does_not_start_a_job(client, tmp_path):
     assert len(list((tmp_path / 'results').rglob('manifest.json'))) == 1
 
 
-def test_a_filter_the_result_cannot_satisfy_is_refused_not_silently_empty(client):
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
-    response = client.get(url + '&mutation=Nonexistent')
+def test_a_filter_the_result_cannot_satisfy_is_refused_not_silently_empty(
+        client, cached_url):
+    response = client.get(cached_url + '&mutation=Nonexistent')
     assert response.status_code == 400
     assert 'Nonexistent' in response.text
 
 
-def test_a_header_link_sorts_the_table(client):
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
-    plain = _first_cell(client.get(url).text)
-    sorted_desc = _first_cell(client.get(url + '&sort=%23+edits&dir=desc').text)
+def test_a_header_link_sorts_the_table(client, cached_url):
+    plain = _first_cell(client.get(cached_url).text)
+    sorted_desc = _first_cell(
+        client.get(cached_url + '&sort=%23+edits&dir=desc').text)
     assert plain and sorted_desc and plain != sorted_desc
 
 
-def test_the_second_page_shows_different_guides(client):
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
-    assert 'Page 1 of' in client.get(url).text
-    assert _first_cell(client.get(url).text) != _first_cell(client.get(url + '&page=2').text)
+def test_the_second_page_shows_different_guides(client, cached_url):
+    assert 'Page 1 of' in client.get(cached_url).text
+    assert (_first_cell(client.get(cached_url).text)
+            != _first_cell(client.get(cached_url + '&page=2').text))
 
 
-def test_a_download_returns_the_stored_file(client):
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
+def test_a_download_returns_the_stored_file(client, cached_url):
     response = client.get('/designs/download?transcript=%s&preset=ABE7.10&file=designs'
                           % ISY1)
     assert response.status_code == 200

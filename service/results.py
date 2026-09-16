@@ -40,6 +40,11 @@ NO_MATCH = 'None'
 # but it is a controlled list of clinical terms, so this cannot collide with one.
 ANY_MATCH = 'any-match'
 
+# Filtered by an exact value rather than by a token. Two distinct values each, so
+# masking them once per parse costs almost nothing and takes the elementwise string
+# comparison off every filtered request.
+VALUE_COLUMNS = ('Edit', 'sgRNA Strand', 'BsmBI flag', '4T flag')
+
 # Sorted as numbers. Every cell is a string, so without this '10' sorts before '9'.
 NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', 'sgrna genomic position'])
 
@@ -65,6 +70,15 @@ class Page:
     pages: int
 
 
+def _masks_from(positions, length):
+    masks = {}
+    for value, rows in positions.items():
+        mask = np.zeros(length, dtype=bool)
+        mask[rows] = True
+        masks[value] = mask
+    return masks
+
+
 def _token_masks(values):
     """Boolean masks, one per token appearing in a ';'-joined column.
 
@@ -79,18 +93,21 @@ def _token_masks(values):
         for token in cell.split(';'):
             if token:
                 positions.setdefault(token, []).append(row)
-    masks = {}
-    for token, rows in positions.items():
-        mask = np.zeros(len(values), dtype=bool)
-        mask[rows] = True
-        masks[token] = mask
-    return masks
+    return _masks_from(positions, len(values))
+
+
+def _value_masks(values):
+    """Boolean masks, one per distinct value in a scalar column."""
+    positions = {}
+    for row, cell in enumerate(values):
+        positions.setdefault(cell, []).append(row)
+    return _masks_from(positions, len(values))
 
 
 class ResultTable(object):
-    """One parsed designs.tsv.gz, with its token masks precomputed."""
+    """One parsed designs.tsv.gz, with its filter masks precomputed."""
 
-    def __init__(self, raw, columns=None):
+    def __init__(self, raw, columns):
         try:
             self.frame = pd.read_csv(
                 io.BytesIO(raw), sep='\t', compression='gzip',
@@ -99,13 +116,15 @@ class ResultTable(object):
                 # and '00123' into a number.
                 dtype=str, keep_default_na=False, na_filter=False)
         except pd.errors.EmptyDataError:
-            self.frame = pd.DataFrame(columns=list(columns or []))
+            self.frame = pd.DataFrame(columns=list(columns))
         self.columns = list(self.frame.columns)
         self.total = len(self.frame)
-        self.rows = self.total
         self._masks = {
             column: _token_masks(self.frame[column].to_numpy())
             for column in TOKEN_COLUMNS if column in self.frame.columns}
+        self._masks.update(
+            (column, _value_masks(self.frame[column].to_numpy()))
+            for column in VALUE_COLUMNS if column in self.frame.columns)
         self._any_match = self._compute_any_match()
 
     def _compute_any_match(self):
@@ -140,6 +159,16 @@ class ResultTable(object):
             raise UnknownFilterValue(token)
         return masks[token]
 
+    def _value_mask(self, column, value):
+        """Rows whose cell is exactly `value`.
+
+        A value this column does not contain is an empty mask, not an error: the
+        vocabularies here are closed and already checked when the query was parsed,
+        so 'no guide is on the antisense strand' is an answer rather than a mistake.
+        """
+        mask = self._masks.get(column, {}).get(value)
+        return np.zeros(self.total, dtype=bool) if mask is None else mask
+
     def _filter_mask(self, view):
         mask = None
 
@@ -154,26 +183,32 @@ class ResultTable(object):
             else:
                 mask = keep(self._token_mask(SIGNIFICANCE_COLUMN, view.significance))
         if view.deaminase:
-            mask = keep((self.frame['Edit'] == view.deaminase).to_numpy())
+            mask = keep(self._value_mask('Edit', view.deaminase))
         if view.strand:
-            mask = keep((self.frame['sgRNA Strand'] == view.strand).to_numpy())
+            mask = keep(self._value_mask('sgRNA Strand', view.strand))
         if view.hide_bsmbi:
-            mask = keep((self.frame['BsmBI flag'] != FLAG_YES).to_numpy())
+            mask = keep(~self._value_mask('BsmBI flag', FLAG_YES))
         if view.hide_4t:
-            mask = keep((self.frame['4T flag'] != FLAG_YES).to_numpy())
+            mask = keep(~self._value_mask('4T flag', FLAG_YES))
         return mask
 
-    def _sorted(self, frame, view):
-        if not view.sort or view.sort not in frame.columns or frame.empty:
-            return frame
-        keys = frame[view.sort]
+    def _ordered(self, positions, view):
+        """`positions`, reordered by the sort this view asks for.
+
+        Sorts the one column being sorted on rather than the frame: a page is 50 rows,
+        so carrying every matched row across all 24 columns through a filter and a
+        reindex is work that is thrown away.
+        """
+        if not view.sort or view.sort not in self.frame.columns or not positions.size:
+            return positions
+        keys = self.frame[view.sort].take(positions).reset_index(drop=True)
         if view.sort in NUMERIC_COLUMNS:
             # A blank cell is not zero -- it is 'this guide has no edits'. coerce puts
             # those at the end either way, rather than sorting them among the numbers.
             keys = pd.to_numeric(keys, errors='coerce')
         order = keys.sort_values(kind='mergesort', ascending=view.dir != 'desc',
                                  na_position='last')
-        return frame.loc[order.index]
+        return positions[order.index.to_numpy()]
 
     def select(self, view):
         """One page of rows, after filtering and sorting.
@@ -182,13 +217,13 @@ class ResultTable(object):
         result that is now filtered down still lands on rows rather than on nothing.
         """
         mask = self._filter_mask(view)
-        frame = self.frame if mask is None else self.frame[mask]
-        matched = len(frame)
+        positions = np.arange(self.total) if mask is None else np.flatnonzero(mask)
+        matched = int(positions.size)
         pages = max(1, math.ceil(matched / ROWS_PER_PAGE))
         page = min(max(view.page, 1), pages)
-        frame = self._sorted(frame, view)
+        positions = self._ordered(positions, view)
         start = (page - 1) * ROWS_PER_PAGE
-        window = frame.iloc[start:start + ROWS_PER_PAGE]
+        window = self.frame.take(positions[start:start + ROWS_PER_PAGE])
         return Page(rows=window.values.tolist(), matched=matched, page=page,
                     pages=pages)
 
@@ -229,7 +264,7 @@ class ResultCache(object):
         with self._lock:
             if key not in self._tables:
                 self._tables[key] = table
-                self._rows += table.rows
+                self._rows += table.total
             self._tables.move_to_end(key)
             self._evict()
             return self._tables[key]
@@ -239,7 +274,7 @@ class ResultCache(object):
         while len(self._tables) > 1 and (len(self._tables) > self.max_frames
                                          or self._rows > self.max_rows):
             _, evicted = self._tables.popitem(last=False)
-            self._rows -= evicted.rows
+            self._rows -= evicted.total
 
     def stats(self):
         with self._lock:

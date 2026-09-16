@@ -22,9 +22,7 @@ from bedesign.engine import ALL_EDITS, DesignParams, UnknownBaseEditor
 
 from .cachekey import RESULT_FILES
 
-# A request has at most a handful of parameters; anything longer is a probe. Both
-# halves of a filtered table URL have to fit.
-MAX_PARAMS = 24
+# No value a request can carry is longer than this; anything longer is a probe.
 MAX_VALUE_LEN = 64
 
 TRANSCRIPT = re.compile(r'^ENST\d{11}$')
@@ -114,22 +112,30 @@ def _flag(value, name):
     raise ValidationError('%s must be true or false.' % name)
 
 
-def _checked_keys(query, allowed):
-    """The request's parameter names, refusing anything not on the allowlist.
+def _bool(query, name):
+    """A checkbox: absent means unset, which is false."""
+    value = _one(query, name)
+    return _flag(value, name) if value else False
+
+
+def _check_keys(query, allowed):
+    """Refuses any parameter name not on the allowlist.
 
     Rejected rather than ignored: silently dropping a parameter would let a user
     believe a setting applied when the result ignored it.
+
+    The allowlist is its own size bound -- no route can legitimately carry more names
+    than it accepts -- so a longer request is refused before the names are compared.
     """
     keys = set(query.keys())
-    if len(keys) > MAX_PARAMS:
+    if len(keys) > len(allowed):
         raise ValidationError('Too many parameters.')
     unknown = sorted(keys - set(allowed))
     if unknown:
         raise ValidationError('Unknown parameter: %s.' % ', '.join(unknown))
-    return keys
 
 
-def parse_editor_params(query, keys=None):
+def parse_editor_params(query):
     """The editor half of a request, as DesignParams.
 
     Shared by /designs and /genes: the search page has to validate a preset before it
@@ -204,8 +210,8 @@ def parse_designs_query(query, transcript_exists=None):
     `transcript_exists` is called only after the ID matches the pattern, so an
     unparseable ID never reaches the database.
     """
-    keys = _checked_keys(query, DESIGN_PARAMS + VIEW_PARAMS)
-    return _transcript(query, transcript_exists), parse_editor_params(query, keys)
+    _check_keys(query, DESIGN_PARAMS + VIEW_PARAMS)
+    return _transcript(query, transcript_exists), parse_editor_params(query)
 
 
 def _transcript(query, transcript_exists):
@@ -226,12 +232,12 @@ def parse_genes_query(query):
 
     The symbol may be empty: an empty search box is a blank results page, not an error.
     """
-    keys = _checked_keys(query, GENE_PARAMS)
+    _check_keys(query, GENE_PARAMS)
     symbol = _one(query, 'q') or ''
     if symbol and not GENE_QUERY.match(symbol):
         raise ValidationError(
             'A gene symbol is letters, digits, dot, dash or underscore, e.g. MAP2K1.')
-    return symbol.upper(), parse_editor_params(query, keys)
+    return symbol.upper(), parse_editor_params(query)
 
 
 @dataclass(frozen=True)
@@ -290,16 +296,13 @@ def parse_view_query(query):
     page = _one(query, 'page')
     page = _int(page, 'page', 1, MAX_PAGE) if page is not None else 1
 
-    hide_bsmbi = _one(query, 'hide_bsmbi')
-    hide_4t = _one(query, 'hide_4t')
-
     return TableView(
         mutation=_open_value(query, 'mutation'),
         significance=_open_value(query, 'significance'),
         deaminase=_choice(query, 'deaminase', ALL_EDITS),
         strand=_choice(query, 'strand', STRANDS),
-        hide_bsmbi=_flag(hide_bsmbi, 'hide_bsmbi') if hide_bsmbi else False,
-        hide_4t=_flag(hide_4t, 'hide_4t') if hide_4t else False,
+        hide_bsmbi=_bool(query, 'hide_bsmbi'),
+        hide_4t=_bool(query, 'hide_4t'),
         sort=sort,
         dir=_choice(query, 'dir', DIRECTIONS) or 'asc',
         page=page,
@@ -316,10 +319,10 @@ def parse_download_query(query, transcript_exists=None):
     `file` is matched against RESULT_FILES rather than turned into a name, which is
     what keeps it out of the storage path.
     """
-    keys = _checked_keys(query, DOWNLOAD_PARAMS)
+    _check_keys(query, DOWNLOAD_PARAMS)
     transcript = _transcript(query, transcript_exists)
     name = _one(query, 'file') or 'designs'
     if name not in RESULT_FILES:
         raise ValidationError('file must be one of %s.'
                               % ', '.join(sorted(RESULT_FILES)))
-    return transcript, parse_editor_params(query, keys), name
+    return transcript, parse_editor_params(query), name

@@ -68,10 +68,10 @@ class UnknownBaseEditor(ValueError):
 @dataclass(frozen=True)
 class DesignParams:
 	"""Everything about a run that is not the transcript or the reference data."""
-	pam: str = 'NGG'
+	pam: str = 'NNN'
 	window: str = '4-8'
 	sg_len: int = 20
-	edit: str = 'all'
+	edit: str = 'A-G'
 	intron_buffer: int = 30
 	filter_gc: bool = False
 
@@ -121,15 +121,23 @@ def get_codon_map():
 	return codon_map
 
 
-# The Rees-2018 editor presets, as 'PAM_window_sgRNAlength_edit'. Module scope so the
-# web service can offer exactly the editors get_pam_window_len accepts.
+# The editor presets, as 'PAM_window_sgRNAlength_edit': the Rees-2018 panel plus
+# ABE8e-SpRY, whose near-PAMless NNN reaches targets the NGG editors cannot. Module
+# scope so the web service can offer exactly the editors get_pam_window_len accepts.
 BE_TYPES = {'BE1':'NGG_4-8_20_C-T', 'BE2':'NGG_4-8_20_C-T', 'BE3':'NGG_4-8_20_C-T', 'HF-BE3':'NGG_4-8_20_C-T', 'BE4':'NGG_4-8_20_C-T', 'BE4max':'NGG_4-8_20_C-T',
 			   'BE4-Gam': 'NGG_4-8_20_C-T', 'YE1-BE3':'NGG_4-7_20_C-T', 'EE-BE3':'NGG_5-6_20_C-T', 'YE2-BE3':'NGG_5-6_20_C-T', 'YEE-BE3':'NGG_5-6_20_C-T',
 			   'VQR-BE3': 'NGAN_4-11_20_C-T', 'VRER-BE3': 'NGCG_3-10_20_C-T', 'SaBE3': 'NNGRRT_3-12_21_C-T', 'SaBE4': 'NNGRRT_3-12_21_C-T',
 			   'SaBE4-Gam': 'NNGRRT_3-12_21_C-T', 'Sa(KKH)-BE3': 'NNNRRT_3-12_21_C-T', 'Target-AID': 'NGG_2-4_20_C-T', 'Target-AID-NG': 'NG_2-4_20_C-T',
 			   'xBE3': 'NG_4-8_20_C-T', 'eA3A-BE3': 'NG_4-8_20_C-T', 'A3A-BE3': 'NG_4-8_20_C-T', 'BE-PLUS':'NGG_4-14_20_C-T', 'ABE7.9':'NGG_5-8_20_A-G',
 			   'ABE7.10': 'NGG_4-7_20_A-G', 'xABE':'NG_4-7_20_A-G', 'ABESa':'NNGRRT_6-12_21_A-G', 'VQR-ABE':'NGA_4-6_20_A-G', 'VRER-ABE':'NGCG_4-6_20_A-G',
-			   'Sa(KKH)-ABE':'NNNRRT_6-12_21_A-G'}
+			   'Sa(KKH)-ABE':'NNNRRT_6-12_21_A-G', 'ABE8e-SpRY':'NNN_4-8_20_A-G'}
+
+# What a run that names no editor gets. Named so the search form can preselect it
+# without repeating the values, and asserted against DesignParams so the two spellings
+# of the same default cannot drift.
+DEFAULT_BE_TYPE = 'ABE8e-SpRY'
+assert BE_TYPES[DEFAULT_BE_TYPE] == '%s_%s_%d_%s' % (
+	DesignParams.pam, DesignParams.window, DesignParams.sg_len, DesignParams.edit)
 
 
 def get_pam_window_len(be):
