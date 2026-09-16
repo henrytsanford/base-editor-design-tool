@@ -121,20 +121,24 @@ def get_codon_map():
 	return codon_map
 
 
-def get_pam_window_len(be):
-	be_types = {'BE1':'NGG_4-8_20_C-T', 'BE2':'NGG_4-8_20_C-T', 'BE3':'NGG_4-8_20_C-T', 'HF-BE3':'NGG_4-8_20_C-T', 'BE4':'NGG_4-8_20_C-T', 'BE4max':'NGG_4-8_20_C-T',
+# The Rees-2018 editor presets, as 'PAM_window_sgRNAlength_edit'. Module scope so the
+# web service can offer exactly the editors get_pam_window_len accepts.
+BE_TYPES = {'BE1':'NGG_4-8_20_C-T', 'BE2':'NGG_4-8_20_C-T', 'BE3':'NGG_4-8_20_C-T', 'HF-BE3':'NGG_4-8_20_C-T', 'BE4':'NGG_4-8_20_C-T', 'BE4max':'NGG_4-8_20_C-T',
 			   'BE4-Gam': 'NGG_4-8_20_C-T', 'YE1-BE3':'NGG_4-7_20_C-T', 'EE-BE3':'NGG_5-6_20_C-T', 'YE2-BE3':'NGG_5-6_20_C-T', 'YEE-BE3':'NGG_5-6_20_C-T',
 			   'VQR-BE3': 'NGAN_4-11_20_C-T', 'VRER-BE3': 'NGCG_3-10_20_C-T', 'SaBE3': 'NNGRRT_3-12_21_C-T', 'SaBE4': 'NNGRRT_3-12_21_C-T',
 			   'SaBE4-Gam': 'NNGRRT_3-12_21_C-T', 'Sa(KKH)-BE3': 'NNNRRT_3-12_21_C-T', 'Target-AID': 'NGG_2-4_20_C-T', 'Target-AID-NG': 'NG_2-4_20_C-T',
 			   'xBE3': 'NG_4-8_20_C-T', 'eA3A-BE3': 'NG_4-8_20_C-T', 'A3A-BE3': 'NG_4-8_20_C-T', 'BE-PLUS':'NGG_4-14_20_C-T', 'ABE7.9':'NGG_5-8_20_A-G',
 			   'ABE7.10': 'NGG_4-7_20_A-G', 'xABE':'NG_4-7_20_A-G', 'ABESa':'NNGRRT_6-12_21_A-G', 'VQR-ABE':'NGA_4-6_20_A-G', 'VRER-ABE':'NGCG_4-6_20_A-G',
 			   'Sa(KKH)-ABE':'NNNRRT_6-12_21_A-G'}
-	if be in be_types.keys():
-		pam, window, sg_len, edit = be_types[be].split('_')
+
+
+def get_pam_window_len(be):
+	if be in BE_TYPES.keys():
+		pam, window, sg_len, edit = BE_TYPES[be].split('_')
 	else:
 		raise UnknownBaseEditor(
 			'Unknown base editor %r. Please enter ONE of the following: %s'
-			% (be, ','.join(be_types)))
+			% (be, ','.join(BE_TYPES)))
 	return pam, window, int(sg_len), edit
 
 
