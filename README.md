@@ -76,17 +76,27 @@ reference bundle and a ClinVar database, as above, and its own dependencies:
     pip install -r requirements-service.txt
     python -m uvicorn service.app:app --port 8000
 
-Then open a URL that spells out the request:
+Then open <http://localhost:8000/>, search for a gene, pick a transcript and a base
+editor, and you get a filterable table with TSV downloads.
+
+Every request is spelled out in its URL, so any view of a result is a link you can
+send to someone:
 
     http://localhost:8000/designs?transcript=ENST00000307102&preset=ABE7.10
     http://localhost:8000/designs?transcript=ENST00000307102&pam=NGG&window=4-8&sg_len=20&edit=all
+    http://localhost:8000/designs?transcript=ENST00000307102&preset=BE4max&mutation=Nonsense&sort=%23+edits&dir=desc
 
 The first request starts the design and shows a page that re-checks every few seconds;
-the result is then cached under `results/`, keyed by a hash of the parameters, so the
-same link is served from disk afterwards. Settings come from the environment:
-`REFDATA`, `CLINVAR_DB`, `RESULTS_DIR`, `MAX_JOBS`, `JOB_TIMEOUT`.
+the result is then cached under `results/`, keyed by a hash of the design parameters,
+so the same link is served from disk afterwards. Filters, sorting and paging are not
+part of that key, so they re-read a cached result rather than recomputing it, and a
+download always gives you the complete file rather than the filtered view.
 
-The gene search page, table filtering and TSV download are not built yet.
+There is no JavaScript: the search page is a plain form and the table's controls are
+links, which is why the app can serve `script-src 'none'`.
+
+Settings come from the environment: `REFDATA`, `CLINVAR_DB`, `RESULTS_DIR`,
+`MAX_JOBS`, `JOB_TIMEOUT`, `TABLE_CACHE_ROWS`, `TABLE_CACHE_FRAMES`.
 
 ## Example
 
