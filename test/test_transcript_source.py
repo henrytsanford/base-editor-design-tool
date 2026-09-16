@@ -5,17 +5,20 @@ these run offline and pin down the semantics that have to match the REST API
 exactly: transcript-order blocks, the stop codon folded into the CDS, flanks
 clamped at contig edges, and minus-strand sequence reverse-complemented.
 """
+import gzip
 import json
 import os
+import shutil
 import sqlite3
 
 import pytest
 from Bio import bgzf
 
-import base_editing_guide_designs as bed
-import transcript_source as ts
-from build_reference import (SCHEMA, merge_stop_codon, order_blocks,
-                             parse_attributes)
+import bedesign.transcript_source as ts
+from bedesign import engine
+from bedesign.transcript_source import TRANSCRIPT_COLUMNS
+from build_reference import (SCHEMA, merge_stop_codon,
+                             order_blocks, parse_attributes, read_gtf)
 
 
 # --------------------------------------------------------------- GTF handling
@@ -27,6 +30,53 @@ def test_parse_attributes():
     assert attrs['gene_id'] == 'ENSG1'
     assert attrs['exon_number'] == '3'
     assert attrs['transcript_name'] == 'ABC-201'
+
+
+def test_parse_attributes_collects_repeated_tags():
+    """A GTF line repeats `tag`; a dict keyed by name would keep only the last."""
+    attrs = parse_attributes(
+        'gene_id "ENSG1"; transcript_id "ENST1"; tag "CCDS"; ccds_id "CCDS152"; '
+        'tag "gencode_basic"; tag "MANE_Select"; tag "Ensembl_canonical";\n')
+    assert attrs['tag'] == ['CCDS', 'gencode_basic', 'MANE_Select',
+                            'Ensembl_canonical']
+    # single-valued keys are untouched, including one sitting between two tags
+    assert attrs['ccds_id'] == 'CCDS152'
+    assert attrs['gene_id'] == 'ENSG1'
+
+
+def test_parse_attributes_without_tags_has_no_tag_key():
+    attrs = parse_attributes('gene_id "ENSG1"; transcript_id "ENST1";\n')
+    assert attrs.get('tag', []) == []
+
+
+GTF_ATTRS = ('gene_id "ENSG1"; transcript_id "%s"; gene_name "G"; '
+             'transcript_name "G-20%s"; transcript_biotype "protein_coding"; %s')
+
+
+def write_gtf(path, lines):
+    with gzip.open(str(path), 'wt') as fh:
+        fh.write('#!genome-version GRCh38\n')
+        for attrs in lines:
+            fh.write('\t'.join(['7', 'ensembl', 'transcript', '101', '300',
+                                '.', '+', '.', attrs]) + '\n')
+
+
+def test_read_gtf_flags_mane_and_canonical(tmp_path):
+    gtf = tmp_path / 'test.gtf.gz'
+    write_gtf(gtf, [
+        GTF_ATTRS % ('ENSTMANE', '1',
+                     'tag "CCDS"; tag "MANE_Select"; tag "Ensembl_canonical";'),
+        GTF_ATTRS % ('ENSTCANON', '2', 'tag "basic"; tag "Ensembl_canonical";'),
+        GTF_ATTRS % ('ENSTPLAIN', '3', 'tag "basic";'),
+    ])
+    transcripts, assembly = read_gtf(str(gtf))
+    assert assembly == 'GRCh38'
+    assert (transcripts['ENSTMANE']['mane_select'],
+            transcripts['ENSTMANE']['ensembl_canonical']) == (1, 1)
+    assert (transcripts['ENSTCANON']['mane_select'],
+            transcripts['ENSTCANON']['ensembl_canonical']) == (0, 1)
+    assert (transcripts['ENSTPLAIN']['mane_select'],
+            transcripts['ENSTPLAIN']['ensembl_canonical']) == (0, 0)
 
 
 def test_order_blocks_is_transcript_order():
@@ -65,11 +115,14 @@ PLUS = {
     'seq_region': '7', 'strand': 1, 'start': 101, 'end': 300,
     'exons': [[101, 150], [201, 300]], 'cds': [[121, 150], [201, 260]],
     'cds_sequence': 'ATG' + 'AAA' * 28 + 'TGA', 'protein_sequence': 'M' + 'K' * 28,
+    'mane_select': 1, 'ensembl_canonical': 1,
 }
-# minus strand, same span
+# minus strand, same span. Canonical for its gene but not MANE, the common case
+# for genes RefSeq and Ensembl have not agreed on.
 MINUS = dict(PLUS, transcript_id='ENST0000MINUS', display_name='MINUS-201',
              gene_id='ENSG0000MINUS', gene_name='MINUS', strand=-1,
-             exons=[[201, 300], [101, 150]], cds=[[201, 260], [121, 150]])
+             exons=[[201, 300], [101, 150]], cds=[[201, 260], [121, 150]],
+             mane_select=0, ensembl_canonical=1)
 # runs to the very start of the contig, so a 40 bp flank cannot fit
 EDGE = dict(PLUS, transcript_id='ENST0000EDGE', display_name='EDGE-201',
             gene_id='ENSG0000EDGE', gene_name='EDGE', start=10, end=60,
@@ -88,13 +141,16 @@ def bundle(tmp_path_factory):
     path.mkdir()
     db = sqlite3.connect(str(path / 'transcripts.db'))
     db.executescript(SCHEMA)
+    insert = ('INSERT INTO transcript (%s) VALUES (%s)'
+              % (','.join(TRANSCRIPT_COLUMNS), ','.join('?' * len(TRANSCRIPT_COLUMNS))))
     for r in RECORDS:
-        db.execute('INSERT INTO transcript VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', (
+        db.execute(insert, (
             r['transcript_id'], r['display_name'], r['gene_id'], r['gene_name'],
             r['biotype'], r['seq_region'], r['strand'], r['start'], r['end'],
             json.dumps(r['exons']),
             json.dumps(r['cds']) if r['cds'] else None,
-            r['cds_sequence'], r['protein_sequence']))
+            r['cds_sequence'], r['protein_sequence'],
+            r['mane_select'], r['ensembl_canonical']))
     db.executemany('INSERT INTO meta VALUES (?,?)',
                    [('release', '999'), ('assembly', 'GRCh38')])
     db.commit()
@@ -124,6 +180,39 @@ def test_lookup_shape_matches_the_rest_response(local):
     assert info['Parent'] == 'ENSG0000PLUS'
     assert info['start'] == 101 and info['end'] == 300
     assert info['Exon'] == [{'start': 101, 'end': 150}, {'start': 201, 'end': 300}]
+
+
+def test_lookup_reports_mane_and_canonical(local):
+    """What the gene search preselects. REST has no equivalent field."""
+    plus = local.lookup('ENST0000PLUS')
+    assert plus['gene_name'] == 'PLUS'
+    assert plus['mane_select'] is True
+    assert plus['ensembl_canonical'] is True
+    # canonical for its gene, but not the MANE Select transcript
+    minus = local.lookup('ENST0000MINUS')
+    assert minus['mane_select'] is False
+    assert minus['ensembl_canonical'] is True
+
+
+def test_a_bundle_without_the_tag_columns_is_refused(bundle, tmp_path):
+    """A bundle is a build artifact, so an old one is rebuilt, not worked around.
+
+    Answering lookups with mane_select=False for every transcript would make the
+    gene search silently preselect nothing, which reads as a bug in the caller.
+    """
+    old = str(tmp_path / 'ensembl-998')
+    shutil.copytree(bundle, old)
+    db = sqlite3.connect(os.path.join(old, ts.TRANSCRIPTS_DB))
+    kept = [c for c in TRANSCRIPT_COLUMNS
+            if c not in ('mane_select', 'ensembl_canonical')]
+    db.executescript(
+        'CREATE TABLE t AS SELECT %s FROM transcript;'
+        'DROP TABLE transcript;'
+        'ALTER TABLE t RENAME TO transcript;' % ','.join(kept))
+    db.commit()
+    db.close()
+    with pytest.raises(ts.BundleNotFound, match='rebuilt'):
+        ts.LocalSource(old)
 
 
 def test_lookup_exons_are_in_transcript_order(local):
@@ -225,9 +314,11 @@ def test_a_half_built_bundle_is_not_usable(tmp_path):
         ts.find_bundle(str(tmp_path))
 
 
-# -------------------------------------------------- the script uses the source
+# ------------------------------------------------- the engine takes a source
 
 class StubSource:
+    """Anything with these methods will do; the engine never names a class."""
+
     def genomic_sequence(self, tr, flank=40):
         return 'ACGT'
 
@@ -238,11 +329,16 @@ class StubSource:
         return 'ATGAAA'
 
 
-def test_getters_read_from_the_module_source(monkeypatch):
-    monkeypatch.setattr(bed, 'SOURCE', StubSource())
-    assert bed.get_tr_sequence('ENST1') == 'ACGT'
-    assert bed.get_pro_sequence('ENST1') == 'MK'
-    assert bed.get_cds_sequence('ENST1') == 'ATGAAA'
+def test_getters_read_the_source_they_are_given():
+    """The source is an argument, not module state, so a caller can hold several.
+
+    That is what lets the web service run designs in a process pool against one
+    bundle and one ClinVar database per worker.
+    """
+    source = StubSource()
+    assert engine.get_tr_sequence(source, 'ENST1') == 'ACGT'
+    assert engine.get_pro_sequence(source, 'ENST1') == 'MK'
+    assert engine.get_cds_sequence(source, 'ENST1') == 'ATGAAA'
 
 
 def test_get_source_rejects_an_unknown_name():

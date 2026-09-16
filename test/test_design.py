@@ -1,22 +1,11 @@
-import os
-import re
-import shutil
-import subprocess
-import sys
 
 import pandas as pd
 import pytest
 
-import build_clinvar
-from base_editing_guide_designs import get_aa_map
+from bedesign.engine import get_aa_map
 
 SAMPLE_DATA_DIR = "Sample_data"
 SAMPLE_REFERENCE = f"{SAMPLE_DATA_DIR}/sample_19-05-07-14-35-42"
-
-# Real ClinVar rows for three of the sample genes (ISY1, PSMB5, MAP2K1), in
-# variant_summary.txt format.
-CLINVAR_FIXTURE = "test/data/variant_summary_sample.txt.gz"
-CLINVAR_GENE = ("ENST00000307102", "MAP2K1")  # 659 variants, densest of the three
 
 # ENST00000334810 (ADGRD2) is in the sample input but was retired from Ensembl
 # after the reference output was made. The REST API still resolves retired IDs
@@ -24,45 +13,8 @@ CLINVAR_GENE = ("ENST00000307102", "MAP2K1")  # 659 variants, densest of the thr
 # release, so the local source cannot design for it.
 RETIRED_IN_CURRENT_RELEASE = ["ENST00000334810"]
 
-
-@pytest.fixture(scope="session")
-def clinvar_db(tmp_path_factory):
-    """A ClinVar database over the sample genes, built by the real builder.
-
-    Building it here rather than checking in a .db keeps the fixture honest: a
-    change to build_clinvar.py that broke the schema or the column mapping would
-    break these tests too.
-    """
-    path = tmp_path_factory.mktemp("clinvar") / "clinvar-test.db"
-    build_clinvar.build(CLINVAR_FIXTURE, str(path))
-    return str(path)
-
-
-@pytest.fixture
-def run_design(clinvar_db):
-    """Runs the script, returning (result, output folder); removes the output afterwards."""
-    folders = []
-
-    def run(input_file, input_type, output_name, *extra, check=True):
-        cmd = [sys.executable, "base_editing_guide_designs.py",
-               "--input-file", input_file, "--input-type", input_type,
-               "--clinvar-db", clinvar_db, "--pam", "NGG", "--intron-buffer", "30",
-               "--edit", "C-T", "--output-name", output_name, "--sg-len", "20", *extra]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if check:
-            assert result.returncode == 0, (
-                f"Script failed with return code {result.returncode}\n"
-                f"STDOUT: {result.stdout}\n"
-                f"STDERR: {result.stderr}"
-            )
-        pattern = re.compile(re.escape(output_name) + r"_\d\d(-\d\d){5}$")
-        found = [d for d in os.listdir(".") if pattern.match(d)]
-        folders.extend(found)
-        return result, found[0] if found else None
-
-    yield run
-    for d in folders:
-        shutil.rmtree(d, ignore_errors=True)
+# The densest gene in the ClinVar fixture (see conftest.CLINVAR_FIXTURE).
+CLINVAR_GENE = ("ENST00000307102", "MAP2K1")  # 659 variants
 
 
 def assert_output_files_equal(output_dir, sample_data_results_dir, output_name,

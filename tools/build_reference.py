@@ -36,7 +36,8 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from transcript_source import GENOME_FA, TRANSCRIPTS_DB
+from bedesign.transcript_source import (GENOME_FA, TRANSCRIPT_COLUMNS,
+                                        TRANSCRIPTS_DB)
 
 FTP_BASE = 'https://ftp.ensembl.org/pub'
 SPECIES = 'homo_sapiens'
@@ -136,14 +137,23 @@ def download(url, dest, streams=DEFAULT_STREAMS):
 # ---------------------------------------------------------------- GTF parsing
 
 def parse_attributes(field):
-    """GTF attributes: key "value"; key "value"; ..."""
+    """GTF attributes: key "value"; key "value"; ...
+
+    `tag` is the one key a line repeats -- a transcript carries several, e.g.
+    tag "CCDS"; tag "MANE_Select"; tag "Ensembl_canonical" -- so it collects into
+    a list. Every other key keeps last-wins, which is what its callers expect.
+    """
     attrs = {}
     for part in field.rstrip().rstrip(';').split(';'):
         part = part.strip()
         if not part:
             continue
         key, _, value = part.partition(' ')
-        attrs[key] = value.strip().strip('"')
+        value = value.strip().strip('"')
+        if key == 'tag':
+            attrs.setdefault('tag', []).append(value)
+        else:
+            attrs[key] = value
     return attrs
 
 
@@ -196,6 +206,12 @@ def read_gtf(path):
                 # one; fall back to the ID so downstream string handling works.
                 rec['display_name'] = attrs.get('transcript_name') or tr
                 rec['biotype'] = attrs.get('transcript_biotype', '')
+                # Which transcript to preselect for a gene: MANE Select is the
+                # one RefSeq and Ensembl agree on, Ensembl_canonical the
+                # fallback for genes that have no MANE transcript.
+                tags = attrs.get('tag', [])
+                rec['mane_select'] = int('MANE_Select' in tags)
+                rec['ensembl_canonical'] = int('Ensembl_canonical' in tags)
             elif feature == 'exon':
                 rec['exons'].append((int(attrs.get('exon_number', 0)), start, end))
             elif feature == 'CDS':
@@ -285,10 +301,17 @@ CREATE TABLE transcript (
     exons            TEXT NOT NULL,   -- JSON [[start,end],...] in transcript order
     cds              TEXT,            -- JSON, transcript order, stop codon included
     cds_sequence     TEXT,
-    protein_sequence TEXT
+    protein_sequence TEXT,
+    mane_select       INTEGER NOT NULL DEFAULT 0,
+    ensembl_canonical INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+-- Gene search looks transcripts up by symbol; the design run looks them up by ID,
+-- which the primary key already covers.
+CREATE INDEX idx_transcript_gene_name ON transcript(gene_name);
+CREATE INDEX idx_transcript_display ON transcript(display_name);
 """
+
 
 
 def build_db(path, transcripts, assembly, release, cds_seqs, pep_seqs):
@@ -314,8 +337,12 @@ def build_db(path, transcripts, assembly, release, cds_seqs, pep_seqs):
             json.dumps(exons, separators=(',', ':')),
             json.dumps(cds, separators=(',', ':')) if cds else None,
             cds_seqs.get(tr), pep_seqs.get(tr),
+            rec.get('mane_select', 0), rec.get('ensembl_canonical', 0),
         ))
-    db.executemany('INSERT INTO transcript VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', rows)
+    db.executemany(
+        'INSERT INTO transcript (%s) VALUES (%s)'
+        % (','.join(TRANSCRIPT_COLUMNS), ','.join('?' * len(TRANSCRIPT_COLUMNS))),
+        rows)
     db.executemany('INSERT INTO meta VALUES (?,?)', [
         ('release', str(release)),
         ('assembly', assembly),

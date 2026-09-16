@@ -35,6 +35,16 @@ BUNDLE_FILES = (TRANSCRIPTS_DB, GENOME_FA)
 
 # The ClinVar database written by tools/build_clinvar.py. The column names are the
 # internal ones the design script is written against, not ClinVar's own.
+# Columns tools/build_reference.py writes, and the ones a bundle must have for
+# LocalSource to answer a lookup. Shared so writer, reader and tests agree.
+TRANSCRIPT_TABLE = 'transcript'
+TRANSCRIPT_COLUMNS = (
+    'transcript_id', 'display_name', 'gene_id', 'gene_name', 'biotype',
+    'seq_region', 'strand', 'start', 'end', 'exons', 'cds', 'cds_sequence',
+    'protein_sequence', 'mane_select', 'ensembl_canonical',
+)
+REQUIRED_TRANSCRIPT_COLUMNS = ('mane_select', 'ensembl_canonical')
+
 CLINVAR_DB_GLOB = 'clinvar-*.db'
 VARIANT_TABLE = 'variant'
 VARIANT_COLUMNS = ('#AlleleID', 'RefSeqID', 'Name', 'GeneSymbol',
@@ -220,6 +230,18 @@ class LocalSource(TranscriptSource):
         self._db = sqlite3.connect(
             'file:%s?mode=ro' % os.path.join(bundle, TRANSCRIPTS_DB), uri=True)
         self._db.row_factory = sqlite3.Row
+        have = {c['name'] for c in
+                self._db.execute('PRAGMA table_info(transcript)')}
+        stale = [c for c in REQUIRED_TRANSCRIPT_COLUMNS if c not in have]
+        if stale:
+            # A bundle is a build artifact, not user data, so an old one is
+            # rebuilt rather than worked around. Tolerating the missing columns
+            # would make every gene look like it has no MANE transcript, which
+            # reads as a bug in the caller rather than a stale bundle.
+            raise BundleNotFound(
+                "Reference bundle at '%s' predates %s and must be rebuilt.\n"
+                "Build one with: python tools/build_reference.py"
+                % (bundle, ', '.join(stale)))
         meta = dict(self._db.execute('SELECT key, value FROM meta').fetchall())
         self.release = meta.get('release', 'unknown')
         self.assembly = meta.get('assembly', 'GRCh38')
@@ -258,6 +280,11 @@ class LocalSource(TranscriptSource):
             'start': row['start'],
             'end': row['end'],
             'Exon': [{'start': s, 'end': e} for s, e in json.loads(row['exons'])],
+            # Beyond what REST returns: which transcript a gene search should
+            # preselect. __init__ has already refused a bundle without these.
+            'gene_name': row['gene_name'],
+            'mane_select': bool(row['mane_select']),
+            'ensembl_canonical': bool(row['ensembl_canonical']),
         }
 
     def cds_mappings(self, tr, length):

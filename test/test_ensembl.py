@@ -7,8 +7,8 @@ responses.
 import pytest
 import requests
 
-import base_editing_guide_designs as bed
-import transcript_source as ts
+from bedesign import engine
+import bedesign.transcript_source as ts
 
 
 @pytest.mark.parametrize(
@@ -26,7 +26,7 @@ import transcript_source as ts
     ],
 )
 def test_strip_tr_version(raw, expected):
-    assert bed.strip_tr_version(raw) == expected
+    assert engine.strip_tr_version(raw) == expected
 
 
 class FakeResponse:

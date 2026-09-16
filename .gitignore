@@ -21,3 +21,4 @@ variant_summary.txt
 # Local Ensembl reference bundle (built by tools/build_reference.py)
 refdata/
 docs/web-service-design.md
+CLAUDE.md
