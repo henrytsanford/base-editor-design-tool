@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Base editor guide designs{% endblock %}
+{% block content %}
+<h1>Design base editor guides</h1>
+<p class="muted">Every possible guide across a transcript's coding sequence, with the
+amino-acid consequence of each edit and any ClinVar variant the edit would recreate.</p>
+
+{# A plain GET form. The whole request ends up in the URL, so a result is a link. #}
+<form method="get" action="/genes" class="card">
+  <div class="field">
+    <label for="q">Gene symbol</label>
+    <input id="q" name="q" required
+           maxlength="32" autofocus placeholder="MAP2K1" autocomplete="off"
+           spellcheck="false">
+    <p class="muted">You pick the transcript on the next page. MANE Select is listed
+    first.</p>
+  </div>
+
+  <div class="field">
+    <label for="preset">Base editor</label>
+    <select id="preset" name="preset">
+      {% for preset in presets %}
+      <option value="{{ preset.name }}"{{ ' selected' if preset.name == default_preset else '' }}>
+        {{ preset.name }} &middot; {{ preset.pam }} &middot; window {{ preset.window }}
+        &middot; {{ preset.edit }}
+      </option>
+      {% endfor %}
+      <option value="">Custom &mdash; set the parameters below</option>
+    </select>
+  </div>
+
+  <details class="advanced">
+    <summary>Advanced</summary>
+    <p class="muted">These apply only when the editor above is set to Custom. Leave a
+    field blank to use its default.</p>
+    <div class="grid">
+      <div class="field">
+        <label for="pam">PAM</label>
+        <input id="pam" name="pam" maxlength="8" placeholder="{{ defaults.pam }}"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="window">Edit window</label>
+        <input id="window" name="window" maxlength="5"
+               placeholder="{{ defaults.window }}" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="sg_len">sgRNA length</label>
+        <input id="sg_len" name="sg_len" type="number"
+               min="{{ sg_len_range[0] }}" max="{{ sg_len_range[1] }}"
+               placeholder="{{ defaults.sg_len }}">
+      </div>
+      <div class="field">
+        <label for="edit">Edit</label>
+        <select id="edit" name="edit">
+          <option value="">{{ defaults.edit }} (default)</option>
+          {% for value in edits %}<option value="{{ value }}">{{ value }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="intron_buffer">Intron buffer (bp)</label>
+        <input id="intron_buffer" name="intron_buffer" type="number"
+               min="{{ intron_buffer_range[0] }}" max="{{ intron_buffer_range[1] }}"
+               placeholder="{{ defaults.intron_buffer }}">
+      </div>
+      <div class="field checkbox">
+        <label><input type="checkbox" name="filter_gc" value="true">
+        Drop edits in a GC motif</label>
+      </div>
+    </div>
+  </details>
+
+  <button type="submit">Find transcripts</button>
+</form>
+{% endblock %}

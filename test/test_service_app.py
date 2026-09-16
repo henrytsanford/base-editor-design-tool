@@ -17,6 +17,7 @@ pytestmark = pytest.mark.bundle
 
 ISY1 = 'ENST00000393295'
 MAP2K1 = 'ENST00000307102'
+DESIGNS_URL = '/designs?transcript=%s&preset=ABE7.10' % ISY1
 
 
 @pytest.fixture
@@ -37,6 +38,13 @@ def wait_for_table(client, url, seconds=90):
             return response
         time.sleep(0.5)
     raise AssertionError('design did not finish within %ds' % seconds)
+
+
+@pytest.fixture
+def cached_url(client):
+    """A finished design, for the tests that are about reading one back."""
+    wait_for_table(client, DESIGNS_URL)
+    return DESIGNS_URL
 
 
 def test_healthz_reports_the_engine_version(client):
@@ -76,10 +84,9 @@ def test_a_design_runs_and_renders_its_guides(client):
     assert re.search(r'\d+ guides?\.', response.text)
 
 
-def test_the_second_request_is_served_from_the_cache(client, tmp_path):
+def test_the_second_request_is_served_from_the_cache(client, cached_url, tmp_path):
     """Requesting an uncached result twice runs it once (the M1 criterion)."""
-    url = '/designs?transcript=%s&preset=ABE7.10' % ISY1
-    wait_for_table(client, url)
+    url = cached_url
     manifests = list((tmp_path / 'results').rglob('manifest.json'))
     assert len(manifests) == 1
     first = manifests[0].read_text()
@@ -196,3 +203,137 @@ def test_results_are_written_under_the_digest_only(client, tmp_path):
     parts = manifest.relative_to(tmp_path / 'results').parts
     assert parts[0] == 'results' and len(parts[2]) == 64
     assert all(re.fullmatch(r'[0-9a-f]+', p) for p in parts[1:3])
+
+
+# --- The search page, the table and downloads (slice 2) -------------------------
+
+
+def test_the_search_page_submits_a_plain_get(client):
+    """No script anywhere in the app, which is what keeps script-src 'none'."""
+    response = client.get('/')
+    assert response.status_code == 200
+    assert 'action="/genes"' in response.text and 'method="get"' in response.text
+    assert '<script' not in response.text
+
+
+def test_the_preset_list_comes_from_the_engine(client):
+    """The dropdown and the validator read one table, so they cannot drift."""
+    from bedesign.engine import BE_TYPES
+    body = client.get('/').text
+    for name in BE_TYPES:
+        assert 'value="%s"' % name in body
+
+
+def test_the_form_preselects_the_default_editor(client):
+    """An untouched form submits the same editor a bare /designs URL would run."""
+    from bedesign.engine import DEFAULT_BE_TYPE
+    body = client.get('/').text
+    assert 'value="%s" selected' % DEFAULT_BE_TYPE in body
+    assert body.count(' selected') == 1
+
+
+def test_a_gene_prefix_lists_the_genes_it_could_mean(client):
+    response = client.get('/genes?q=MAP2K')
+    assert response.status_code == 200
+    assert 'MAP2K1' in response.text and 'MAP2K7' in response.text
+
+
+def test_a_gene_lists_its_transcripts_with_mane_first(client):
+    response = client.get('/genes?q=MAP2K1&preset=ABE7.10')
+    assert response.status_code == 200
+    assert 'MANE Select' in response.text
+    assert MAP2K1 in response.text
+    # The link out carries the editor choice, so /designs needs nothing added.
+    assert 'preset=ABE7.10' in response.text
+
+
+def test_a_gene_search_that_matches_nothing_says_so(client):
+    response = client.get('/genes?q=ZZZZZZZZ')
+    assert response.status_code == 200
+    assert 'No gene symbol starts with' in response.text
+
+
+def test_a_hostile_gene_query_is_refused_and_escaped(client):
+    response = client.get('/genes?q=%3Cscript%3E')
+    assert response.status_code == 400
+    assert '<script>' not in response.text
+
+
+def test_no_page_in_the_app_needs_javascript(client):
+    """script-src is 'none', so a page that needed a script would simply break."""
+    urls = ['/', '/genes?q=MAP2K1', '/designs?transcript=%s&preset=ABE7.10' % ISY1]
+    for url in urls:
+        response = client.get(url)
+        assert '<script' not in response.text, url
+        assert "script-src 'none'" in response.headers['content-security-policy']
+
+
+def test_filtering_a_cached_table_does_not_start_a_job(client, cached_url, tmp_path):
+    """A filter is a view of a result, not a different result (design doc 3.1)."""
+    url = cached_url
+    manifests = list((tmp_path / 'results').rglob('manifest.json'))
+    assert len(manifests) == 1
+
+    started = client.app.state.pool.submit
+    calls = []
+    client.app.state.pool.submit = lambda *a, **k: calls.append(a) or started(*a, **k)
+    filtered = client.get(url + '&mutation=Missense')
+    assert filtered.status_code == 200
+    assert 'guides match' in filtered.text
+    assert calls == [], 'filtering must not start a job'
+    assert len(list((tmp_path / 'results').rglob('manifest.json'))) == 1
+
+
+def test_a_filter_the_result_cannot_satisfy_is_refused_not_silently_empty(
+        client, cached_url):
+    response = client.get(cached_url + '&mutation=Nonexistent')
+    assert response.status_code == 400
+    assert 'Nonexistent' in response.text
+
+
+def test_a_header_link_sorts_the_table(client, cached_url):
+    plain = _first_cell(client.get(cached_url).text)
+    sorted_desc = _first_cell(
+        client.get(cached_url + '&sort=%23+edits&dir=desc').text)
+    assert plain and sorted_desc and plain != sorted_desc
+
+
+def test_the_second_page_shows_different_guides(client, cached_url):
+    assert 'Page 1 of' in client.get(cached_url).text
+    assert (_first_cell(client.get(cached_url).text)
+            != _first_cell(client.get(cached_url + '&page=2').text))
+
+
+def test_a_download_returns_the_stored_file(client, cached_url):
+    response = client.get('/designs/download?transcript=%s&preset=ABE7.10&file=designs'
+                          % ISY1)
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/gzip'
+    assert ISY1 in response.headers['content-disposition']
+    assert 'attachment' in response.headers['content-disposition']
+    assert response.content[:2] == b'\x1f\x8b'
+
+
+def test_a_download_of_an_uncached_result_starts_no_job(client, tmp_path):
+    """Otherwise a download would be a way around the limiter on /designs."""
+    response = client.get('/designs/download?transcript=%s&preset=BE4max&file=designs'
+                          % MAP2K1)
+    assert response.status_code == 404
+    assert not list((tmp_path / 'results').rglob('manifest.json'))
+
+
+@pytest.mark.parametrize('query', [
+    'file=../../etc/passwd',
+    'file=manifest',
+    'mutation=Missense',
+])
+def test_a_bad_download_request_is_refused(client, query):
+    response = client.get('/designs/download?transcript=%s&preset=ABE7.10&%s'
+                          % (ISY1, query))
+    assert response.status_code == 400
+
+
+def _first_cell(html):
+    """The first data cell of the rendered table, for comparing orderings."""
+    match = re.search(r'<tbody>\s*<tr><td>(.*?)</td>', html, re.S)
+    return match.group(1) if match else ''

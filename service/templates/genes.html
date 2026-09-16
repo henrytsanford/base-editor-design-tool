@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ gene or symbol or 'Gene search' }}{% endblock %}
+{% block content %}
+<h1>{{ gene or 'Gene search' }}</h1>
+
+<form method="get" action="/genes" class="inline">
+  <label for="q" class="visually-hidden">Gene symbol</label>
+  <input id="q" name="q" value="{{ symbol }}" maxlength="32" autocomplete="off"
+         spellcheck="false" placeholder="MAP2K1">
+  {# The editor choice travels with the search so the links below stay complete. #}
+  {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <button type="submit">Search</button>
+</form>
+
+{% if not symbol %}
+<p class="muted">Enter a gene symbol to see its transcripts.</p>
+
+{% elif not gene and not others %}
+<p class="muted">No gene symbol starts with <strong>{{ symbol }}</strong>.
+<a href="/">Start again</a>.</p>
+
+{% else %}
+
+{% if gene %}
+<p class="status">{{ transcripts|length }} transcript{{ '' if transcripts|length == 1 else 's' }}.
+Designing with PAM {{ params.pam }}, window {{ params.window }},
+{{ params.sg_len }} nt, edit {{ params.edit }}.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Transcript</th><th>Biotype</th><th>Location</th><th>CDS</th><th></th></tr></thead>
+<tbody>
+{% for transcript in transcripts %}
+<tr{{ ' class="preferred"'|safe if loop.first and transcript.mane_select else '' }}>
+  <td><a href="{{ transcript.url }}">{{ transcript.display_name }}</a>
+      <span class="muted">{{ transcript.transcript_id }}</span>
+      {% if transcript.mane_select %}<span class="badge">MANE Select</span>
+      {% elif transcript.ensembl_canonical %}<span class="badge">Canonical</span>{% endif %}</td>
+  <td>{{ transcript.biotype }}</td>
+  <td class="muted">{{ transcript.seq_region }}:{{ transcript.start }}&ndash;{{ transcript.end }}
+      ({{ '+' if transcript.strand == 1 else '-' }})</td>
+  <td class="muted">{{ transcript.cds_length or '&mdash;'|safe }}</td>
+  <td><a class="go" href="{{ transcript.url }}">Design</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}
+
+{% if others %}
+<p class="muted">{% if gene %}Other genes{% else %}Genes{% endif %} starting with
+<strong>{{ symbol }}</strong>{% if truncated %} (first {{ others|length }}){% endif %}:</p>
+<ul class="matches">
+{% for other in others %}<li><a href="{{ other.url }}">{{ other.name }}</a></li>{% endfor %}
+</ul>
+{% endif %}
+
+{% endif %}
+{% endblock %}
