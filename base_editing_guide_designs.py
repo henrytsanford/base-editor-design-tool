@@ -1,8 +1,29 @@
+import sys
+
+# NB: keep this block parseable by Python 2 so it can report the version
+# instead of dying with a SyntaxError. No f-strings here.
+if sys.version_info < (3, 9):
+	sys.exit(
+		"This tool requires Python 3.9 or newer (tested on 3.13); you are "
+		"running %s.\nSee the README for setup instructions."
+		% sys.version.split()[0]
+	)
+
 import pandas as pd
 import csv, argparse, re
-import requests, sys, os
+import os
+import contextlib
 from datetime import datetime
 from Bio import SeqIO
+
+# Transcript reference data, from the Ensembl REST API or a local bundle.
+from transcript_source import (
+	BundleNotFound,
+	EnsemblRestSource,
+	EnsemblUnavailable,
+	TranscriptNotFound,
+	get_source,
+)
 
 
 def get_parser():
@@ -49,6 +70,16 @@ def get_parser():
 	parser.add_argument('--output-name',
 		type=str,
 		help='Output name')
+	parser.add_argument('--source',
+		type=str,
+		choices=['rest','local'],
+		default='rest',
+		help='Where transcript reference data comes from: the Ensembl REST API (rest) '
+			 'or a local reference bundle (local)')
+	parser.add_argument('--refdata',
+		type=str,
+		default='refdata',
+		help='Directory holding the local reference bundle (used with --source local)')
 	return parser
 
 
@@ -57,6 +88,15 @@ def revcom(s):
 	letters = list(s[::-1])
 	letters = [basecomp[base] for base in letters]
 	return ''.join(letters)
+
+
+'''
+Ensembl's REST API rejects versioned transcript IDs (ENST00000294952.13 returns
+HTTP 400), so drop the suffix. Also trims stray whitespace, which spreadsheet
+exports tend to leave behind.
+'''
+def strip_tr_version(tr):
+	return re.sub(r'^(ENS[A-Z]*[GTP]\d+)\.\d+$', r'\1', str(tr).strip())
 
 
 def get_aa_map():
@@ -115,18 +155,36 @@ def check_ressite_4t(sg):
 	return res_flag, t4_flag
 
 
+# Reference data for the getters below; replaced from --source in __main__.
+SOURCE = EnsemblRestSource()
+
+
+'''
+Turns a reference-data failure into a readable message instead of a traceback.
+Used as a context manager so the run's output files are closed before exiting.
+Only the CLI exits: the exceptions themselves stay catchable by other callers.
+'''
+@contextlib.contextmanager
+def reference_error_guard(output_folder):
+	try:
+		yield
+	except TranscriptNotFound as e:
+		sys.exit("%s\nPartial output remains in %s." % (e, output_folder))
+	except EnsemblUnavailable as e:
+		sys.exit(
+			"%s\n"
+			"The Ensembl REST API is not responding; this is usually a temporary "
+			"outage on their end. Re-run with --source local to design from a local "
+			"reference bundle instead. Partial output remains in %s." % (e, output_folder)
+		)
+
+
 '''
 Returns information about gene, assembly, chromosome of specified Ensembl transcript; Also returns absolute values for gene with respect to
 genomic locations; Flags genes for absence of UTRs;
 '''
 def get_tr_info(tr, input_type):
-	server = "https://rest.ensembl.org"
-	ext = "/lookup/id/"+tr+"?expand=1"
-	r = requests.get(server+ext, headers={ "Content-Type" : "application/json"})
-	if not r.ok:
-		r.raise_for_status()
-		sys.exit("Transcript not found")
-	tr_info = r.json()
+	tr_info = SOURCE.lookup(tr)
 	gene_name = tr_info['display_name'].rsplit('-', 1)[0]
 	assembly = tr_info['assembly_name']
 	gene_strand = tr_info['strand']
@@ -156,14 +214,10 @@ Returns exon boundaries for transcript;Also returns absolute values for gene wit
 genomic locations
 '''
 def get_exons(tr, length, gene_start, gene_strand):
-	server = "https://rest.ensembl.org"
-	ext = "/map/cds/"+tr+"/1.."+str(length)+"?"
-	r = requests.get(server+ext, headers={ "Content-Type" : "application/json"})
-	if not r.ok:
-		#sys.exit()
+	exons_all = SOURCE.cds_mappings(tr, length)
+	if exons_all is None:
+		# No CDS (e.g. a non-coding transcript)
 		return '',''
-	decoded = r.json()
-	exons_all = decoded['mappings']
 	if gene_strand == 1:
 		gene_start_pos = exons_all[0]['start'] - gene_start
 	else:
@@ -322,40 +376,19 @@ def get_cds_map(exons, gene_strand):
 Returns sequence of transcript along with 5' and 3' UTR
 '''
 def get_tr_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;expand_5prime=40;expand_3prime=40"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
-	if not r.ok:
-		r.raise_for_status()
-		return ''
-	sequence = r.text
-	return sequence
+	return SOURCE.genomic_sequence(tr)
 
 '''
 Returns protein sequence of transcript
 '''
 def get_pro_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;type=protein"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
-	if not r.ok:
-		r.raise_for_status()
-		return ''
-	pro_sequence = r.text
-	return pro_sequence
+	return SOURCE.protein_sequence(tr)
 
 '''
 Returns CDS sequence of transcript
 '''
 def get_cds_sequence(tr):
-	server = "https://rest.ensembl.org"
-	ext = "/sequence/id/"+tr+"?content-type=text/plain;type=cds"
-	r = requests.get(server+ext, headers={ "Content-Type" : "text/plain"})
-	if not r.ok:
-		r.raise_for_status()
-		return ''
-	cds_sequence = r.text
-	return cds_sequence
+	return SOURCE.cds_sequence(tr)
 
 '''
 Translates sgRNA sequence and annotates frame
@@ -444,7 +477,7 @@ def parse_variant_df(variant_df):
 	parsed_variant_df = parsed_variant_df.reset_index(drop=True)
 	parsed_variant_df = parsed_variant_df.rename(columns={'Start': 'ClinVar_SNP_Position'})
 	parsed_variant_df = parsed_variant_df.assign(
-    RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
+		RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
 	)
 	parsed_variant_df = parsed_variant_df[['#AlleleID',
 										   'RefSeqID',
@@ -625,7 +658,6 @@ def get_clinical_sig(snp_type_list):
 	if not snp_type_list:
 		clinical_sig = ''
 	else:
-		snp_type_list = [i for i in snp_type_list if i != "None"]
 		clinical_sig = ';'.join(snp_type_list)
 	return clinical_sig
 
@@ -810,8 +842,7 @@ def get_print_edits(edit_map):
 		if '_' in v:
 			vals = v.split('_')
 			aa_edits = aa_edits + vals[0] + ';'
-			if vals[1] != None:
-				cat = cat+vals[1]+';'
+			cat = cat+vals[1]+';'
 			# len(vals) > 2 for coding sequence, <= 2 for non-coding (intron, UTR, flanking)
 			if len(vals) > 2:
 				old_codon = old_codon + vals[2] + ';'
@@ -1067,6 +1098,7 @@ def write_readme(output_folder, input_file, pam, window, edit, variant_file, int
 		w.writerow((['Edit: '+edit]))
 		w.writerow((['Intron Buffer: ' + str(intron_buffer)]))
 		w.writerow((['Filter out GC motifs: ' + str(filter_gc)]))
+		w.writerow((['Reference: ' + SOURCE.describe()]))
 		w.writerow((['Variant file: ' + variant_file]))
 		w.writerow((['Output folder: '+output_folder]))
 	return
@@ -1082,6 +1114,7 @@ def read_args(args):
 		filter_gc = False
 	if input_type == 'tid':
 		input_df = pd.read_table(args.input_file)
+		input_df.iloc[:, 0] = input_df.iloc[:, 0].map(strip_tr_version)
 	else:
 		input_df = pd.DataFrame(columns=['Sequence', 'ID'])
 		fasta_seqs = SeqIO.parse(open(args.input_file), 'fasta')
@@ -1133,10 +1166,14 @@ def check_sequences(seq):
 
 if __name__ == '__main__':
 	args = get_parser().parse_args()
+	try:
+		SOURCE = get_source(args.source, args.refdata)
+	except BundleNotFound as e:
+		sys.exit(str(e))
 	input_type, input_file, input_df, pam, window, sg_len, edit, parsed_variant_df, variant_file, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc = read_args(args)
 	write_readme(output_folder, input_file, pam, window, edit, variant_file, intron_buffer, filter_gc)
 
-	with open(output_folder+'/sgrna_designs_'+output_name+'.txt','w') as o_sgrna, open(output_folder + '/error_report.txt', 'w') as o_error, open(output_folder+'/clinvar_annotations_'+output_name+'.txt','w') as o_clin:
+	with reference_error_guard(output_folder), open(output_folder+'/sgrna_designs_'+output_name+'.txt','w') as o_sgrna, open(output_folder + '/error_report.txt', 'w') as o_error, open(output_folder+'/clinvar_annotations_'+output_name+'.txt','w') as o_clin:
 		w_error = csv.writer(o_error,delimiter='\t')
 		w_error.writerow(['Gene Symbol','Ensembl transcript ID','sgRNA','sgRNA Strand','Error'])
 		w = csv.writer(o_sgrna,delimiter='\t')

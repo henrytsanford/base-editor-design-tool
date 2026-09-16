@@ -1,0 +1,23 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+
+# Virtualenvs
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# ClinVar variant file (large, downloaded/symlinked per user)
+variant_summary.txt
+
+# Timestamped run output (<output-name>_yy-mm-dd-HH-MM-SS/)
+*_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+
+# Local Ensembl reference bundle (built by tools/build_reference.py)
+refdata/
+docs/web-service-design.md

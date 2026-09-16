@@ -18,4 +18,79 @@ FASTA file with nucleotide sequence
 9. <b>Intron buffer</b>: Number of bp into the intron to consider for guide design.
 10. <b>Filter GC</b>: Whether to filter out edits in a GC motif.
 11. <b>Output name</b>: Name for output folder.
+12. <b>Source</b>: Where transcript data comes from: <code>rest</code> (the Ensembl REST API, the default) or <code>local</code> (a reference bundle built by <code>tools/build_reference.py</code>). See "Working offline" below.
+13. <b>Refdata</b>: Directory holding the local reference bundle; Default: refdata.
 
+
+## Requirements
+
+Python 3.9 or newer (tested on 3.13).
+
+## Setup
+
+    git clone https://github.com/mhegde/base-editor-design-tool.git
+    cd base-editor-design-tool
+    pip install -r requirements.txt
+
+Download the ClinVar variant file into the repository directory:
+
+    curl -O https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
+    gunzip variant_summary.txt.gz
+
+## Working offline (recommended)
+
+By default the tool fetches transcript data from `rest.ensembl.org`, five calls per
+transcript. That API is frequently overloaded, and when it is down a run cannot produce
+any output. You can instead build a local copy of the reference data once and design
+against it with no network at all:
+
+    python tools/build_reference.py            # ~30 minutes, ~1 GB downloaded
+
+If a proxy mishandles the build's parallel downloads, add `--streams 1`. The finished
+bundle is about 2 GB.
+
+Then add `--source local` to any design command:
+
+    python base_editing_guide_designs.py \
+        --input-file my_transcripts.txt \
+        --input-type tid \
+        --source local \
+        --variant-file variant_summary.txt \
+        --output-name my_designs
+
+Besides removing the outage risk this is considerably faster, and it makes results
+reproducible: designs are pinned to one Ensembl release rather than to whatever the API
+happened to serve that day. The release used is recorded in each run's `README.txt`.
+
+Rebuild when you want a newer Ensembl release (`--release`); old bundles can be kept
+alongside so past results stay reproducible.
+
+## Example
+
+    python base_editing_guide_designs.py \
+        --input-file Sample_data/GFP.fasta \
+        --input-type nuc \
+        --edit C-T \
+        --output-name GFP
+
+Results are written to `GFP_<timestamp>/`.
+
+## Troubleshooting
+
+**`Ensembl REST API is unavailable`** — `rest.ensembl.org` is down or overloaded;
+requests have already been retried seven times. Re-run later, or use `--source local`.
+To check the API, request a real record: <https://rest.ensembl.org/info/ping> answers
+even while data endpoints fail.
+
+**`Transcript '...' not found in Ensembl`** — check the ID at <https://www.ensembl.org>
+(version suffixes such as `.13` are stripped automatically). With `--source local`, the
+ID may also be retired in, or newer than, the bundle's Ensembl release.
+
+## Tests (developers only)
+
+    pytest test/
+
+Tests that query the Ensembl REST API run only with `ENSEMBL_TESTS=1`, and tests that
+need the local bundle skip until it is built. `test/test_local_source.py` checks that the
+bundle and the REST API agree on a panel of transcripts covering strand, exon count,
+missing UTRs and non-coding transcripts.
