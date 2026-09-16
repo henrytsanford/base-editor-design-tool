@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Busy{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="{{ poll_seconds }}">{% endblock %}
+{% block content %}
+<h1>Busy</h1>
+<p class="status">Every worker is designing something else. This page retries every
+{{ poll_seconds }} seconds.</p>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ transcript_id }} designs{% endblock %}
+{% block content %}
+<h1>{{ transcript_id }}</h1>
+<p class="muted">
+PAM {{ params.pam }} &middot; window {{ params.window }} &middot;
+sgRNA {{ params.sg_len }} nt &middot; edit {{ params.edit }} &middot;
+intron buffer {{ params.intron_buffer }} &middot;
+GC filter {{ params.filter_gc }}
+</p>
+<p class="status">{{ total }} guide{{ '' if total == 1 else 's' }}.
+{% if total > shown %}Showing the first {{ shown }}.{% endif %}</p>
+{% if rows %}
+<div class="scroll">
+<table>
+<thead><tr>{% for column in header %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for row in rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No guides were designed for this transcript.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{# A GET here can start a design job, so crawlers are turned away twice: #}
+{# this tag and /robots.txt. #}
+<meta name="robots" content="noindex,nofollow">
+{% block head %}{% endblock %}
+<title>{% block title %}Base editor guide designs{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header><a href="/designs?transcript=ENST00000307102&amp;preset=ABE7.10">Base editor guide designs</a></header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
