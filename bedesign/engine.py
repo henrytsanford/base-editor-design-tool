@@ -51,6 +51,11 @@ ANNOTATIONS_FILE = 'clinvar_annotations_%s.txt'
 # 'all' means both deaminase directions, run in this order.
 ALL_EDITS = ('C-T', 'A-G')
 
+# Identifies the design output these functions produce. It is part of the web
+# service's cache key, so a result can be traced to the code that made it: bump it
+# in the same commit as any change that moves the goldens.
+ENGINE_VERSION = '3.0.0'
+
 
 class UnknownBaseEditor(ValueError):
 	"""--be-type named an editor that is not in the preset table.

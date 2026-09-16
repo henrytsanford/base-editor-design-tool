@@ -22,3 +22,9 @@ variant_summary.txt
 refdata/
 docs/web-service-design.md
 CLAUDE.md
+
+# Finished designs written by the web service (design doc 3.1: S3 at M2)
+results/
+
+# CDK synth output (M2)
+cdk.out/

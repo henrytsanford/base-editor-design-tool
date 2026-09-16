@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Designing {{ transcript_id }}{% endblock %}
+{% block head %}
+{# No JavaScript: re-running the same GET is exactly the check we want, and it #}
+{# keeps the page inside a script-src 'none' policy. #}
+<meta http-equiv="refresh" content="{{ poll_seconds }}">
+{% endblock %}
+{% block content %}
+<h1>Designing {{ transcript_id }}</h1>
+<p class="status">Working. This page re-checks every {{ poll_seconds }} seconds.</p>
+<p class="muted">Large genes take longer &mdash; TTN, the biggest in the reference
+set, takes about a minute. The link keeps working once it is done.</p>
+{% endblock %}

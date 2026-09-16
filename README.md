@@ -68,6 +68,26 @@ happened to serve that day. The release used is recorded in each run's `README.t
 Rebuild when you want a newer Ensembl release (`--release`); old bundles can be kept
 alongside so past results stay reproducible.
 
+## Web service (in progress)
+
+There is also a small web app that serves the same designs over HTTP. It needs a local
+reference bundle and a ClinVar database, as above, and its own dependencies:
+
+    pip install -r requirements-service.txt
+    python -m uvicorn service.app:app --port 8000
+
+Then open a URL that spells out the request:
+
+    http://localhost:8000/designs?transcript=ENST00000307102&preset=ABE7.10
+    http://localhost:8000/designs?transcript=ENST00000307102&pam=NGG&window=4-8&sg_len=20&edit=all
+
+The first request starts the design and shows a page that re-checks every few seconds;
+the result is then cached under `results/`, keyed by a hash of the parameters, so the
+same link is served from disk afterwards. Settings come from the environment:
+`REFDATA`, `CLINVAR_DB`, `RESULTS_DIR`, `MAX_JOBS`, `JOB_TIMEOUT`.
+
+The gene search page, table filtering and TSV download are not built yet.
+
 ## Example
 
     python base_editing_guide_designs.py \
