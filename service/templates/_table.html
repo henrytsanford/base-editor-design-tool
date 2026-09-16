@@ -1,0 +1,20 @@
+{# The results grid. Its own file so the header cells and the rows have one
+   definition, whatever page renders them. #}
+{% if result.rows %}
+<div class="scroll">
+<table>
+<thead><tr>
+{% for column in columns %}
+<th class="{{ column.sorted }}"><a href="{{ column.url }}">{{ column.name }}</a></th>
+{% endfor %}
+</tr></thead>
+<tbody>
+{% for row in result.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+</tbody>
+</table>
+</div>
+{% elif view.filtered %}
+<p class="muted">No guide matches these filters. <a href="{{ clear_url }}">Clear them</a>.</p>
+{% else %}
+<p class="muted">No guides were designed for this transcript.</p>
+{% endif %}

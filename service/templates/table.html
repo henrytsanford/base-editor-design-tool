@@ -8,18 +8,75 @@ sgRNA {{ params.sg_len }} nt &middot; edit {{ params.edit }} &middot;
 intron buffer {{ params.intron_buffer }} &middot;
 GC filter {{ params.filter_gc }}
 </p>
-<p class="status">{{ total }} guide{{ '' if total == 1 else 's' }}.
-{% if total > shown %}Showing the first {{ shown }}.{% endif %}</p>
-{% if rows %}
-<div class="scroll">
-<table>
-<thead><tr>{% for column in header %}<th>{{ column }}</th>{% endfor %}</tr></thead>
-<tbody>
-{% for row in rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
-</tbody>
-</table>
-</div>
-{% else %}
-<p class="muted">No guides were designed for this transcript.</p>
+
+{# A GET form: applying a filter produces a URL that can be sent to someone. #}
+<form method="get" action="/designs" class="filters">
+  {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <div class="field">
+    <label for="mutation">Mutation category</label>
+    <select id="mutation" name="mutation">
+      <option value="">Any</option>
+      {% for token, count in facets.mutation %}
+      <option value="{{ token }}"{{ ' selected' if view.mutation == token else '' }}>{{ token }} ({{ count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="significance">ClinVar</label>
+    <select id="significance" name="significance">
+      <option value="">Any</option>
+      <option value="{{ any_match }}"{{ ' selected' if view.significance == any_match else '' }}>Any known variant ({{ facets.any_match }})</option>
+      {% for token, count in facets.significance %}
+      <option value="{{ token }}"{{ ' selected' if view.significance == token else '' }}>{{ token }} ({{ count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="deaminase">Edit</label>
+    <select id="deaminase" name="deaminase">
+      <option value="">Any</option>
+      {% for value in edits %}
+      <option value="{{ value }}"{{ ' selected' if view.deaminase == value else '' }}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="strand">Strand</label>
+    <select id="strand" name="strand">
+      <option value="">Any</option>
+      {% for value in strands %}
+      <option value="{{ value }}"{{ ' selected' if view.strand == value else '' }}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field checkbox">
+    <label><input type="checkbox" name="hide_bsmbi" value="true"{{ ' checked' if view.hide_bsmbi else '' }}> Hide BsmBI</label>
+    <label><input type="checkbox" name="hide_4t" value="true"{{ ' checked' if view.hide_4t else '' }}> Hide 4T</label>
+  </div>
+  <button type="submit">Apply</button>
+  {% if view.filtered %}<a class="muted" href="{{ clear_url }}">Clear</a>{% endif %}
+</form>
+
+<p class="status">
+{% if view.filtered %}{{ result.matched }} of {{ total }} guides match.
+{% else %}{{ total }} guide{{ '' if total == 1 else 's' }}.{% endif %}
+{% if result.pages > 1 %}Page {{ result.page }} of {{ result.pages }}.{% endif %}
+</p>
+
+{% include "_table.html" %}
+
+{% if result.pages > 1 %}
+<nav class="pager">
+  {% if pager.previous %}<a href="{{ pager.previous }}">&larr; Previous</a>
+  {% else %}<span class="muted">&larr; Previous</span>{% endif %}
+  <span class="muted">Page {{ result.page }} of {{ result.pages }}</span>
+  {% if pager.next %}<a href="{{ pager.next }}">Next &rarr;</a>
+  {% else %}<span class="muted">Next &rarr;</span>{% endif %}
+</nav>
 {% endif %}
+
+<p class="downloads">Download the full result:
+{% for name, url in downloads %}<a href="{{ url }}">{{ name }}.tsv.gz</a>{{ '' if loop.last else ' &middot; ' }}{% endfor %}
+<span class="muted">&mdash; the complete file, not the filtered view.</span></p>
 {% endblock %}

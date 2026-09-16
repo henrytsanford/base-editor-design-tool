@@ -14,3 +14,43 @@ p { margin: 6px 0; }
 table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
 th, td { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; }
 th { background: #fafafa; position: sticky; top: 0; }
+
+/* Forms and controls. No inline styles anywhere: style-src is 'self'. */
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 16px; max-width: 560px; }
+.field { margin: 0 0 12px; }
+.field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.field.checkbox label { display: inline-block; font-weight: 400; margin-right: 14px; }
+input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--line);
+                border-radius: 4px; background: var(--bg); color: var(--fg); }
+input[type=number] { width: 8em; }
+#q, #pam, #window { width: 100%; max-width: 260px; }
+select { max-width: 340px; }
+button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0; border-radius: 4px;
+         background: var(--accent); color: #fff; cursor: pointer; }
+details.advanced { margin: 4px 0 14px; }
+details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
+form.inline { margin: 0 0 14px; }
+form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 14px;
+               border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+               margin-bottom: 12px; }
+form.filters .field { margin-bottom: 0; }
+form.filters button { margin-right: 8px; }
+
+/* Gene list */
+.badge { font-size: 11px; font-weight: 600; color: #fff; background: var(--accent);
+         border-radius: 3px; padding: 1px 5px; margin-left: 4px; }
+tr.preferred td { background: #f3fbf6; }
+a.go { font-weight: 600; }
+ul.matches { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
+/* Sortable headers */
+th a { color: inherit; text-decoration: none; }
+th a:hover { text-decoration: underline; }
+th.asc a::after { content: " \2191"; }
+th.desc a::after { content: " \2193"; }
+
+.pager { margin: 12px 0; display: flex; gap: 16px; align-items: center; }
+.downloads { margin-top: 16px; font-size: 13px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                   clip: rect(0 0 0 0); white-space: nowrap; }

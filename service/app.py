@@ -5,31 +5,38 @@ key, and then either renders the cached table, joins a running job, or starts on
 Nothing is stored about a request beyond the in-memory job table, so a restart costs
 a recomputation rather than a broken link.
 
-Slice 1 serves the design doc's 3 end to end. The search page, gene lookup, table
-filtering and downloads are slice 2.
+The same idea carries the rest of the app: a filter, a sort and a page are query
+parameters, so every view of a result is a link someone can send. There is no
+JavaScript anywhere -- the running page re-checks with a meta refresh, and sorting and
+paging are ordinary anchors -- which is why `script-src` can stay `'none'`.
+
+A request has two halves. Only the design half reaches the cache key, so filtering a
+table re-renders a cached result instead of computing a new one.
 """
 import contextlib
-import csv
-import gzip
-import io
-import itertools
 import json
 import logging
 import os
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from bedesign import ENGINE_VERSION
+from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
+from bedesign.engine import ALL_EDITS, BE_TYPES, DesignParams
 
-from .cachekey import cache_key, manifest_key, result_key
+from .cachekey import RESULT_FILES, cache_key, manifest_key, result_key
 from .config import Settings
 from .jobs import JobPool, PoolBusy
-from .params import ValidationError, parse_designs_query
+from .params import (DESIGN_PARAMS, EDITOR_ALL, EDITS, INTRON_BUFFER_RANGE,
+                     SG_LEN_RANGE, STRANDS, VIEW_PARAMS, ValidationError,
+                     parse_designs_query, parse_download_query, parse_genes_query,
+                     parse_view_query)
 from .ratelimit import TokenBucket, client_ip
-from .references import References
+from .references import GENE_LIMIT, References
+from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -38,12 +45,14 @@ TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), 't
 
 # How often the running page re-checks. Design doc 3 says 3 seconds.
 POLL_SECONDS = 3
-# Slice 1 renders a fixed slice of the table; slice 2 adds paging and filters.
-PREVIEW_ROWS = 200
 
-# No script-src at all: the running page re-checks with a meta refresh rather than
-# JavaScript, so slice 1 needs no script origin. Slice 2 relaxes this to 'self' when
-# it vendors HTMX for the table fragments.
+# The order parameters appear in a URL we build. Fixed, so the same view always has
+# the same link and two people comparing URLs see the same string.
+DESIGNS_ORDER = DESIGN_PARAMS + VIEW_PARAMS
+DOWNLOAD_ORDER = DESIGN_PARAMS + ('file',)
+
+# No script-src at all. Nothing in the app needs JavaScript: the running page uses a
+# meta refresh, and the table's filters, sort and paging are links and a GET form.
 CSP = ("default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 SECURITY_HEADERS = {
@@ -56,6 +65,12 @@ SECURITY_HEADERS = {
 
 ROBOTS = 'User-agent: *\nDisallow: /\n'
 
+# The preset dropdown, read from the engine's own table so it cannot offer an editor
+# the validator would then refuse.
+PRESETS = [dict(zip(('name', 'pam', 'window', 'sg_len', 'edit'),
+                    (name,) + tuple(spec.split('_'))))
+           for name, spec in BE_TYPES.items()]
+
 
 def scrub(value):
     """Makes a user-supplied string safe to put in a log line.
@@ -64,6 +79,33 @@ def scrub(value):
     into the log, including entries that look like they came from the server.
     """
     return repr(str(value)[:200])
+
+
+def values_of(query):
+    """The request's parameters as a plain dict.
+
+    Safe only after validation, which is what rules out a repeated name; here the
+    first value would win and quietly disagree with the value that was validated.
+    """
+    return {name: query[name] for name in query.keys()}
+
+
+def build_url(path, values, order, **overrides):
+    """A link to `path` carrying these parameters, with some changed.
+
+    Names outside `order` are dropped rather than passed through, which is how a
+    download link sheds the filters and a transcript link sheds the search box.
+    Empty and false values are omitted so an unset filter leaves no trace in the URL.
+    """
+    merged = dict(values)
+    merged.update(overrides)
+    items = []
+    for name in order:
+        value = merged.get(name)
+        if value is None or value == '' or value is False:
+            continue
+        items.append((name, 'true' if value is True else str(value)))
+    return '%s?%s' % (path, urlencode(items))
 
 
 def create_app(settings=None):
@@ -75,6 +117,8 @@ def create_app(settings=None):
         app.state.storage = LocalStorage(settings.results_dir)
         app.state.pool = JobPool(app.state.references, settings)
         app.state.limiter = TokenBucket(settings.rate_burst, settings.rate_seconds)
+        app.state.tables = ResultCache(settings.table_cache_rows,
+                                       settings.table_cache_frames)
         log.info('serving %s, clinvar %s, results in %s',
                  app.state.references.bundle, app.state.references.clinvar_version,
                  app.state.storage.root)
@@ -101,6 +145,9 @@ def create_app(settings=None):
         return TEMPLATES.TemplateResponse(request=request, name=template,
                                           context=context, status_code=status_code)
 
+    def bad_request(request, message):
+        return page(request, 'error.html', status_code=400, message=message)
+
     @app.get('/healthz')
     def healthz():
         return JSONResponse({'status': 'ok', 'engine_version': ENGINE_VERSION})
@@ -111,21 +158,70 @@ def create_app(settings=None):
         # turned away here and again with a noindex meta tag in base.html.
         return PlainTextResponse(ROBOTS)
 
+    @app.get('/', response_class=HTMLResponse)
+    def search(request: Request):
+        """The search page. A plain GET form, so it needs no script and no session."""
+        return page(request, 'search.html', presets=PRESETS, defaults=DesignParams(),
+                    edits=EDITS, strands=STRANDS,
+                    sg_len_range=SG_LEN_RANGE,
+                    intron_buffer_range=INTRON_BUFFER_RANGE)
+
+    @app.get('/genes', response_class=HTMLResponse)
+    def genes(request: Request):
+        """Gene symbol to transcript.
+
+        Renders matches for a prefix, and the transcript list once the symbol names
+        exactly one gene. The editor choice rides along in the query string so the
+        links out of here arrive at /designs fully specified.
+        """
+        try:
+            symbol, params = parse_genes_query(request.query_params)
+        except ValidationError as e:
+            return bad_request(request, str(e))
+
+        references = app.state.references
+        matches = references.search_genes(symbol)
+        # An exact hit wins over a prefix list, and a prefix that can only mean one
+        # gene resolves too, so searching 'MAP2K1' does not stop to ask which MAP2K1.
+        gene = symbol if symbol in matches else (matches[0] if len(matches) == 1
+                                                 else '')
+        transcripts = references.transcripts_for_gene(gene) if gene else []
+
+        values = values_of(request.query_params)
+        for transcript in transcripts:
+            transcript['url'] = build_url('/designs', values, DESIGN_PARAMS,
+                                          transcript=transcript['transcript_id'])
+        others = [{'name': name,
+                   'url': build_url('/genes', values, ('q',) + DESIGN_PARAMS, q=name)}
+                  for name in matches if name != gene]
+
+        return page(request, 'genes.html', symbol=symbol, gene=gene,
+                    transcripts=transcripts, others=others, params=params,
+                    truncated=len(matches) >= GENE_LIMIT,
+                    # So refining the search keeps the editor the user chose.
+                    hidden=[(name, values[name]) for name in EDITOR_ALL
+                            if values.get(name)])
+
     @app.get('/designs', response_class=HTMLResponse)
     def designs(request: Request):
         references = app.state.references
         try:
             transcript_id, params = parse_designs_query(
                 request.query_params, references.transcript_exists)
+            view = parse_view_query(request.query_params)
         except ValidationError as e:
-            return page(request, 'error.html', status_code=400, message=str(e))
+            return bad_request(request, str(e))
 
         key = cache_key(transcript_id, params, references.release,
                         references.clinvar_version, ENGINE_VERSION)
 
         manifest = _manifest(app.state.storage, key)
         if manifest is not None:
-            return _table(request, key, transcript_id, params, manifest)
+            try:
+                return _table(request, key, transcript_id, params, view, manifest)
+            except UnknownFilterValue as e:
+                return bad_request(
+                    request, 'No guide in this result is annotated %s.' % e)
 
         failed = app.state.pool.failure(key)
         if failed:
@@ -148,11 +244,83 @@ def create_app(settings=None):
 
         return page(request, 'running.html', transcript_id=transcript_id, key=key)
 
-    def _table(request, key, transcript_id, params, manifest):
-        header, rows = _read_designs(app.state.storage, key)
-        return page(request, 'table.html', transcript_id=transcript_id, params=params,
-                    key=key, header=header, rows=rows,
-                    total=manifest.get('designs', len(rows)), shown=len(rows))
+    @app.get('/designs/download')
+    def download(request: Request):
+        """The complete result file, as the engine wrote it.
+
+        Filters are a way of reading the table, not of cutting the file: a download is
+        always the whole result, so it matches what the CLI produces for the same
+        parameters. An uncached key is a 404 -- a download never starts a job, which
+        would otherwise be a way around the rate limit on /designs.
+        """
+        references = app.state.references
+        try:
+            transcript_id, params, name = parse_download_query(
+                request.query_params, references.transcript_exists)
+        except ValidationError as e:
+            return bad_request(request, str(e))
+
+        key = cache_key(transcript_id, params, references.release,
+                        references.clinvar_version, ENGINE_VERSION)
+        try:
+            data = app.state.storage.get(result_key(key, name))
+        except KeyError:
+            return page(request, 'error.html', status_code=404,
+                        message='That result is not ready yet. Open the table first.')
+
+        # transcript_id already matched ^ENST\\d{11}$ and the file name came out of a
+        # fixed table, so neither can carry anything into the header.
+        filename = '%s_%s' % (transcript_id, RESULT_FILES[name])
+        return Response(content=data, media_type='application/gzip', headers={
+            'Content-Disposition': 'attachment; filename="%s"' % filename})
+
+    def _table(request, key, transcript_id, params, view, manifest):
+        storage = app.state.storage
+
+        def load():
+            return ResultTable(storage.get(result_key(key, 'designs')),
+                               DESIGN_COLUMNS)
+
+        table = app.state.tables.get(key, load)
+        result = table.select(view)
+        values = values_of(request.query_params)
+
+        def designs_url(**overrides):
+            # Any change to what is shown returns to the first page: page 4 of a
+            # freshly filtered table is usually not where the user wanted to land.
+            overrides.setdefault('page', None)
+            return build_url('/designs', values, DESIGNS_ORDER, **overrides)
+
+        columns = []
+        for column in table.columns:
+            descending = view.sort == column and view.dir != 'desc'
+            columns.append({
+                'name': column,
+                'url': designs_url(sort=column, dir='desc' if descending else 'asc'),
+                'sorted': 'desc' if view.sort == column and view.dir == 'desc'
+                          else ('asc' if view.sort == column else ''),
+            })
+
+        pager = {
+            'first': designs_url() if result.page > 1 else '',
+            'previous': build_url('/designs', values, DESIGNS_ORDER,
+                                  page=result.page - 1 if result.page > 2 else None)
+                        if result.page > 1 else '',
+            'next': build_url('/designs', values, DESIGNS_ORDER, page=result.page + 1)
+                    if result.page < result.pages else '',
+        }
+
+        return page(
+            request, 'table.html', transcript_id=transcript_id, params=params,
+            view=view, key=key, columns=columns, result=result,
+            total=manifest.get('designs', table.total), facets=table.facets(),
+            any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
+            clear_url=build_url('/designs', values, DESIGN_PARAMS),
+            hidden=[(name, values[name]) for name in DESIGN_PARAMS + ('sort', 'dir')
+                    if values.get(name)],
+            downloads=[(name, build_url('/designs/download', values, DOWNLOAD_ORDER,
+                                        file=name))
+                       for name in ('designs', 'errors', 'clinvar')])
 
     return app
 
@@ -168,23 +336,6 @@ def _manifest(storage, key):
         return json.loads(storage.get(manifest_key(key)))
     except KeyError:
         return None
-
-
-def _read_designs(storage, key, limit=PREVIEW_ROWS):
-    """The first `limit` design rows, for the slice 1 table.
-
-    Decompressed lazily and cut off with islice: TTN is 25,662 rows, and inflating
-    and parsing all of them to show 200 is work the page never uses. The row count
-    comes from the manifest instead.
-
-    Reads only a file this app wrote, at a key built from a digest.
-    """
-    raw = storage.get(result_key(key, 'designs'))
-    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
-        text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
-        reader = csv.reader(text, delimiter='\t')
-        header = next(reader, [])
-        return header, list(itertools.islice(reader, limit))
 
 
 app = create_app()
