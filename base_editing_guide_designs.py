@@ -19,9 +19,13 @@ from Bio import SeqIO
 # Transcript reference data, from the Ensembl REST API or a local bundle.
 from transcript_source import (
 	BundleNotFound,
+	ClinVarNotFound,
+	ClinVarSource,
 	EnsemblRestSource,
 	EnsemblUnavailable,
 	TranscriptNotFound,
+	empty_variants,
+	find_clinvar_db,
 	get_source,
 )
 
@@ -31,10 +35,20 @@ def get_parser():
 	parser.add_argument('--input-file',
 		type=str,
 		help='File with Ensembl transcript IDs or fasta file with nucleotide sequences')
+	parser.add_argument('--clinvar-db',
+		type=str,
+		default=None,
+		help='ClinVar database built by tools/build_clinvar.py '
+			 '(default: the newest clinvar-<date>.db under --refdata)')
+	parser.add_argument('--no-clinvar',
+		action='store_true',
+		help='Skip ClinVar annotation')
+	# Accepted only so that a run using it gets a pointer instead of argparse's
+	# 'unrecognized arguments'. Handled in __main__.
 	parser.add_argument('--variant-file',
 		type=str,
-		default='variant_summary.txt',
-		help='File with ClinVar SNPs (variant_summary.txt)')
+		default=None,
+		help=argparse.SUPPRESS)
 	parser.add_argument('--input-type',
 		type=str,
 		help='tid for transcript IDs and nuc for nucleotide sequence')
@@ -462,34 +476,6 @@ def get_sgrna_translated_seq(sgrna, cds_map, abs_pos, fs, sgrna_start_pos, gene_
 					map_key -=1
 	return sgrna_trans
 
-
-'''
-Cleans variant file from ClinVar database
-'''
-def parse_variant_df(variant_df):
-	# Remove non-GRCh38 rows, non-SNPs, and chromosomes other than 1-22, X, and Y.
-	temp_variant_df = variant_df[(variant_df.Assembly == 'GRCh38')
-								& (variant_df.Type == 'single nucleotide variant')
-								& (variant_df.Chromosome != 'MT')
-								& (variant_df.Chromosome != 'na')
-								& (variant_df.ReferenceAllele != 'na')]
-	parsed_variant_df = temp_variant_df.copy()
-	parsed_variant_df = parsed_variant_df.reset_index(drop=True)
-	parsed_variant_df = parsed_variant_df.rename(columns={'Start': 'ClinVar_SNP_Position'})
-	parsed_variant_df = parsed_variant_df.assign(
-		RefSeqID=parsed_variant_df['Name'].str.split(pat='(', n=1).str[0]
-	)
-	parsed_variant_df = parsed_variant_df[['#AlleleID',
-										   'RefSeqID',
-										   'Name',
-										   'GeneSymbol',
-										   'ClinicalSignificance',
-										   'PhenotypeList',
-										   'ClinVar_SNP_Position',
-										   'ReferenceAllele',
-										   'AlternateAllele',
-										   'ReviewStatus']]
-	return parsed_variant_df
 
 '''
 Parses the ClinVar SNP name
@@ -1089,7 +1075,7 @@ def get_seq_pro(cds, codon_map):
 	return pro
 
 
-def write_readme(output_folder, input_file, pam, window, edit, variant_file, intron_buffer, filter_gc):
+def write_readme(output_folder, input_file, pam, window, edit, clinvar, intron_buffer, filter_gc):
 	with open(output_folder+'/README.txt','w') as o:
 		w = csv.writer(o,delimiter='\t')
 		w.writerow((['Input file: '+input_file]))
@@ -1099,7 +1085,7 @@ def write_readme(output_folder, input_file, pam, window, edit, variant_file, int
 		w.writerow((['Intron Buffer: ' + str(intron_buffer)]))
 		w.writerow((['Filter out GC motifs: ' + str(filter_gc)]))
 		w.writerow((['Reference: ' + SOURCE.describe()]))
-		w.writerow((['Variant file: ' + variant_file]))
+		w.writerow((['Variants: ' + (clinvar.describe() if clinvar else 'none')]))
 		w.writerow((['Output folder: '+output_folder]))
 	return
 
@@ -1130,29 +1116,18 @@ def read_args(args):
 		window = args.edit_window
 		sg_len = args.sg_len
 		edit = args.edit
-	variant_file = args.variant_file
-	variant_df = pd.read_table(variant_file, dtype = {'#AlleleID':str, 'Name':str, 'ClinicalSignificance':str, 'Assembly':str,
-													  'Chromosome':str,'Type':str,'Start':int,'ReferenceAllele':str,
-													  'AlternateAllele':str,'ReviewStatus':str}, usecols = ['#AlleleID',
-																											'GeneSymbol',
-																											'Name',
-																											'ClinicalSignificance',
-																											'PhenotypeList',
-																											'Assembly',
-																											'Chromosome',
-																											'Type',
-																											'Start',
-																											'ReferenceAllele',
-																											'AlternateAllele',
-																											'ReviewStatus'])
-	parsed_variant_df = parse_variant_df(variant_df)
+	# Nucleotide input has no gene to look up, so it never needs the database open.
+	if args.no_clinvar or input_type != 'tid':
+		clinvar = None
+	else:
+		clinvar = ClinVarSource(find_clinvar_db(args.clinvar_db, args.refdata))
 	output_name = args.output_name
 	output_folder = output_name + '_' + str(datetime.now().strftime("%y-%m-%d-%H-%M-%S"))
 	if not os.path.exists(output_folder):
 		os.makedirs(output_folder)
 	codon_map = get_codon_map()
 	aa_map = get_aa_map()
-	return input_type, input_file, input_df, pam, window, sg_len, edit, parsed_variant_df, variant_file, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc
+	return input_type, input_file, input_df, pam, window, sg_len, edit, clinvar, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc
 
 
 def check_sequences(seq):
@@ -1166,12 +1141,19 @@ def check_sequences(seq):
 
 if __name__ == '__main__':
 	args = get_parser().parse_args()
+	if args.variant_file is not None:
+		sys.exit(
+			"--variant-file is not used any more. ClinVar SNPs are read from a "
+			"database instead of variant_summary.txt.\n"
+			"Build one with: python tools/build_clinvar.py --variant-summary %s\n"
+			"Then re-run without --variant-file, or pass --clinvar-db <path>."
+			% args.variant_file)
 	try:
 		SOURCE = get_source(args.source, args.refdata)
-	except BundleNotFound as e:
+		input_type, input_file, input_df, pam, window, sg_len, edit, clinvar, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc = read_args(args)
+	except (BundleNotFound, ClinVarNotFound) as e:
 		sys.exit(str(e))
-	input_type, input_file, input_df, pam, window, sg_len, edit, parsed_variant_df, variant_file, output_name, output_folder, codon_map, aa_map, intron_buffer, filter_gc = read_args(args)
-	write_readme(output_folder, input_file, pam, window, edit, variant_file, intron_buffer, filter_gc)
+	write_readme(output_folder, input_file, pam, window, edit, clinvar, intron_buffer, filter_gc)
 
 	with reference_error_guard(output_folder), open(output_folder+'/sgrna_designs_'+output_name+'.txt','w') as o_sgrna, open(output_folder + '/error_report.txt', 'w') as o_error, open(output_folder+'/clinvar_annotations_'+output_name+'.txt','w') as o_clin:
 		w_error = csv.writer(o_error,delimiter='\t')
@@ -1229,7 +1211,7 @@ if __name__ == '__main__':
 					print(error)
 					w_error.writerow([gene_name, tr, 'N/A', error])
 					continue
-				gene_variant_df = parsed_variant_df[parsed_variant_df.GeneSymbol == gene_name]
+				gene_variant_df = clinvar.variants_for_gene(gene_name) if clinvar else empty_variants()
 			elif input_type == 'nuc':
 				tr_seq = r.iloc[0]
 				seq_error = check_sequences(tr_seq)
@@ -1243,7 +1225,7 @@ if __name__ == '__main__':
 				abs_pos_map, fs = get_absolute_pos(gene_start, gene_end, gene_strand, input_type)
 				cds_map = get_cds_map(exons, gene_strand)
 				utr = {}
-				gene_variant_df = parsed_variant_df[parsed_variant_df.GeneSymbol == '']
+				gene_variant_df = empty_variants()
 				cds_start_exon = 1
 			else:
 				print('Please enter a valid input type; tid for list of transcripts or nuc for fasta sequences')

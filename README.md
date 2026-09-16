@@ -3,12 +3,12 @@
 user-defined transcripts. It then annotates the possible edits for each guide. Separate files annotating ClinVar SNPs are also generated.</p>
 <b>Author</b>: Mudra Hegde, Ruth Hanna <br/>
 <b>Email</b>: mhegde@broadinstitute.org, rhanna@broadinstitute.org <br/>
-<b>Version: 2.0 </b> 
+<b>Version: 3.0 </b> 
 
 <b>Inputs</b>
 1. <b>Input File</b>:.txt file with list of Ensembl transcript IDs in the first column and gene symbols in the second column OR 
 FASTA file with nucleotide sequence
-2. <b>Variant File</b>: Variant file: File with ClinVar SNPs (variant_summary.txt). This file can be downloaded from ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz.
+2. <b>ClinVar database</b>: ClinVar SNPs, as a database built by <code>tools/build_clinvar.py</code>; Default: the newest <code>clinvar-&lt;date&gt;.db</code> under <code>--refdata</code>. Pass <code>--no-clinvar</code> to skip the annotation.
 3. <b>Input type</b>: Indicate whether the file contains a list of transcripts or a nucleotide sequence.
 4. <b>Base editor type</b>: Indicate the type of base editor (Rees et al.,2018) for which designs are required. This choice dictates the choice of PAM, sgRNA length, editing window and type of edit.
 5. <b>PAM</b>: PAM preference if BE type has not been selected; Default: NGG.
@@ -19,7 +19,7 @@ FASTA file with nucleotide sequence
 10. <b>Filter GC</b>: Whether to filter out edits in a GC motif.
 11. <b>Output name</b>: Name for output folder.
 12. <b>Source</b>: Where transcript data comes from: <code>rest</code> (the Ensembl REST API, the default) or <code>local</code> (a reference bundle built by <code>tools/build_reference.py</code>). See "Working offline" below.
-13. <b>Refdata</b>: Directory holding the local reference bundle; Default: refdata.
+13. <b>Refdata</b>: Directory holding the local reference bundle and the ClinVar database; Default: refdata.
 
 
 ## Requirements
@@ -32,10 +32,14 @@ Python 3.9 or newer (tested on 3.13).
     cd base-editor-design-tool
     pip install -r requirements.txt
 
-Download the ClinVar variant file into the repository directory:
+Build the ClinVar database, which the tool uses to annotate each edit with the SNPs it
+would create:
 
-    curl -O https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
-    gunzip variant_summary.txt.gz
+    python tools/build_clinvar.py       # ~440 MB downloaded; the build itself takes ~30 s
+
+This writes `refdata/clinvar-<date>.db`, which design runs query one gene at a time.
+It populates the `Clinical significance` column and the `clinvar_annotations_*.txt`
+file. NCBI publishes a new `variant_summary.txt` weekly; re-run to refresh.
 
 ## Working offline (recommended)
 
@@ -55,7 +59,6 @@ Then add `--source local` to any design command:
         --input-file my_transcripts.txt \
         --input-type tid \
         --source local \
-        --variant-file variant_summary.txt \
         --output-name my_designs
 
 Besides removing the outage risk this is considerably faster, and it makes results

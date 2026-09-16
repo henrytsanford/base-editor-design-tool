@@ -7,10 +7,16 @@ import sys
 import pandas as pd
 import pytest
 
+import build_clinvar
 from base_editing_guide_designs import get_aa_map
 
 SAMPLE_DATA_DIR = "Sample_data"
 SAMPLE_REFERENCE = f"{SAMPLE_DATA_DIR}/sample_19-05-07-14-35-42"
+
+# Real ClinVar rows for three of the sample genes (ISY1, PSMB5, MAP2K1), in
+# variant_summary.txt format.
+CLINVAR_FIXTURE = "test/data/variant_summary_sample.txt.gz"
+CLINVAR_GENE = ("ENST00000307102", "MAP2K1")  # 659 variants, densest of the three
 
 # ENST00000334810 (ADGRD2) is in the sample input but was retired from Ensembl
 # after the reference output was made. The REST API still resolves retired IDs
@@ -20,26 +26,27 @@ RETIRED_IN_CURRENT_RELEASE = ["ENST00000334810"]
 
 
 @pytest.fixture(scope="session")
-def variant_file(tmp_path_factory):
-    """A header-only ClinVar file. No test here checks ClinVar output, and parsing
-    the real variant_summary.txt costs ~40 s per run."""
-    path = tmp_path_factory.mktemp("clinvar") / "variant_summary.txt"
-    columns = ["#AlleleID", "GeneSymbol", "Name", "ClinicalSignificance", "PhenotypeList",
-               "Assembly", "Chromosome", "Type", "Start", "ReferenceAllele",
-               "AlternateAllele", "ReviewStatus"]
-    path.write_text("\t".join(columns) + "\n")
+def clinvar_db(tmp_path_factory):
+    """A ClinVar database over the sample genes, built by the real builder.
+
+    Building it here rather than checking in a .db keeps the fixture honest: a
+    change to build_clinvar.py that broke the schema or the column mapping would
+    break these tests too.
+    """
+    path = tmp_path_factory.mktemp("clinvar") / "clinvar-test.db"
+    build_clinvar.build(CLINVAR_FIXTURE, str(path))
     return str(path)
 
 
 @pytest.fixture
-def run_design(variant_file):
+def run_design(clinvar_db):
     """Runs the script, returning (result, output folder); removes the output afterwards."""
     folders = []
 
     def run(input_file, input_type, output_name, *extra, check=True):
         cmd = [sys.executable, "base_editing_guide_designs.py",
                "--input-file", input_file, "--input-type", input_type,
-               "--variant-file", variant_file, "--pam", "NGG", "--intron-buffer", "30",
+               "--clinvar-db", clinvar_db, "--pam", "NGG", "--intron-buffer", "30",
                "--edit", "C-T", "--output-name", output_name, "--sg-len", "20", *extra]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if check:
@@ -68,7 +75,7 @@ def assert_output_files_equal(output_dir, sample_data_results_dir, output_name,
     ) as f2:
         # don't test columns with known differences:
         # Ensembl Gene ID missing from test file
-        # Clinical significance broken by ClinVar changes
+        # Clinical significance depends on the ClinVar release the run used
         # BsmBI flag logic changed from test file
         df1 = pd.read_csv(f1, sep="\t").drop(
             columns=["Ensembl Gene ID", "Clinical significance", "BsmBI flag"])
@@ -132,6 +139,33 @@ def test_tid_input_local_source(run_design, current_sample_input, refdata):
     # the README names the temporary input file, so it cannot match the reference
     assert_output_files_equal(output_dir, SAMPLE_REFERENCE, "sample",
                               exclude=RETIRED_IN_CURRENT_RELEASE, check_readme=False)
+
+
+@pytest.mark.bundle
+def test_clinvar_annotates_a_known_gene(run_design, tmp_path, refdata):
+    """A gene with hundreds of ClinVar SNVs must come back with annotations.
+
+    Empty annotation is invisible to every other test here: get_snps writes a row
+    per edit whether or not a SNP matched, and the golden comparison drops the
+    Clinical significance column. So assert on matches, not on row counts.
+    """
+    transcript, gene = CLINVAR_GENE
+    path = tmp_path / "clinvar_gene.txt"
+    path.write_text(f"Transcript ID\tGene Symbol\n{transcript}\t{gene}\n")
+    _, output_dir = run_design(str(path), "tid", "clinvar_gene",
+                               "--source", "local", "--refdata", refdata)
+
+    annotations = pd.read_csv(f"{output_dir}/clinvar_annotations_clinvar_gene.txt",
+                              sep="\t")
+    matched = annotations[annotations["SNP name"].notna()]
+    assert len(matched) > 0, f"no ClinVar SNP matched any edit in {gene}"
+    assert matched["SNP clinical significance"].notna().all()
+
+    designs = pd.read_csv(f"{output_dir}/sgrna_designs_clinvar_gene.txt", sep="\t")
+    # get_clinical_sig joins 'None' per unmatched edit, so a working run is one
+    # where at least some guides carry something other than 'None'.
+    reported = designs["Clinical significance"].fillna("").str.replace("None", "")
+    assert (reported.str.strip(";").str.strip() != "").any()
 
 
 @pytest.mark.bundle

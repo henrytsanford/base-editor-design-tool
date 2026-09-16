@@ -1,8 +1,11 @@
-"""Where transcript reference data comes from.
+"""Where reference data comes from.
 
 The design script needs five things from Ensembl per transcript. This module puts
 them behind one interface, served either by rest.ensembl.org (`EnsemblRestSource`)
 or by a local reference bundle built by tools/build_reference.py (`LocalSource`).
+
+It also serves the other reference set a run needs, the ClinVar variants for a gene
+(`ClinVarSource`), out of a database built by tools/build_clinvar.py.
 """
 import glob
 import json
@@ -12,6 +15,7 @@ import re
 import sqlite3
 import time
 
+import pandas as pd
 import requests
 from Bio.Seq import reverse_complement
 
@@ -29,6 +33,16 @@ TRANSCRIPTS_DB = 'transcripts.db'
 GENOME_FA = 'genome.fa.bgz'
 BUNDLE_FILES = (TRANSCRIPTS_DB, GENOME_FA)
 
+# The ClinVar database written by tools/build_clinvar.py. The column names are the
+# internal ones the design script is written against, not ClinVar's own.
+CLINVAR_DB_GLOB = 'clinvar-*.db'
+VARIANT_TABLE = 'variant'
+VARIANT_COLUMNS = ('#AlleleID', 'RefSeqID', 'Name', 'GeneSymbol',
+                   'ClinicalSignificance', 'PhenotypeList', 'ClinVar_SNP_Position',
+                   'ReferenceAllele', 'AlternateAllele', 'ReviewStatus')
+# One gene is queried once per edit in a run, so a handful of symbols is plenty.
+VARIANT_CACHE_SIZE = 4
+
 
 class EnsemblUnavailable(Exception):
     """The reference service could not be reached after repeated attempts."""
@@ -36,6 +50,10 @@ class EnsemblUnavailable(Exception):
 
 class BundleNotFound(Exception):
     """No usable local reference bundle was found on disk."""
+
+
+class ClinVarNotFound(Exception):
+    """No usable ClinVar database was found on disk."""
 
 
 class TranscriptNotFound(Exception):
@@ -288,6 +306,67 @@ class LocalSource(TranscriptSource):
 
     def cds_sequence(self, tr):
         return self._record(tr)['cds_sequence'] or ''
+
+
+def empty_variants():
+    """The no-variants case, shaped like `variants_for_gene` output.
+
+    Used for nucleotide input and for --no-clinvar. `ClinVar_SNP_Position` has to be
+    an integer column so `get_snps` can match it against genomic positions.
+    """
+    frame = pd.DataFrame(columns=list(VARIANT_COLUMNS), dtype=object)
+    return frame.astype({'ClinVar_SNP_Position': 'int64'})
+
+
+class ClinVarSource(object):
+    """ClinVar variants on disk, from a database built by tools/build_clinvar.py.
+
+    A design run only ever asks for one gene's variants at a time, so this queries
+    an indexed table rather than loading the 4.1-million-row export.
+    """
+
+    def __init__(self, db_path):
+        if not os.path.exists(db_path):
+            raise ClinVarNotFound(
+                "ClinVar database '%s' does not exist.\n"
+                "Build one with: python tools/build_clinvar.py" % db_path)
+        self.db_path = db_path
+        self._db = sqlite3.connect('file:%s?mode=ro' % db_path, uri=True)
+        meta = dict(self._db.execute('SELECT key, value FROM meta').fetchall())
+        self.rows = meta.get('rows', 'unknown')
+        self._cache = {}
+
+    def describe(self):
+        """One line naming the variant data, recorded in the run README."""
+        return 'ClinVar database %s (%s variants)' % (self.db_path, self.rows)
+
+    def variants_for_gene(self, symbol):
+        """The gene's variants, in the shape design_sgrnas expects."""
+        if symbol not in self._cache:
+            if len(self._cache) >= VARIANT_CACHE_SIZE:
+                # dicts keep insertion order, so this drops the oldest symbol
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[symbol] = pd.read_sql(
+                'SELECT * FROM %s WHERE GeneSymbol = ?' % VARIANT_TABLE,
+                self._db, params=(symbol,))
+        return self._cache[symbol]
+
+
+def find_clinvar_db(clinvar_db, refdata='refdata'):
+    """Resolves --clinvar-db to a database file.
+
+    Accepts the file itself, or falls back to the newest clinvar-<date>.db under
+    --refdata. The names carry ISO dates, so they sort by age.
+    """
+    if clinvar_db:
+        return clinvar_db
+    candidates = sorted(glob.glob(os.path.join(refdata, CLINVAR_DB_GLOB)))
+    if not candidates:
+        raise ClinVarNotFound(
+            "No ClinVar database under '%s'.\n"
+            "Build one with: python tools/build_clinvar.py\n"
+            "Or skip ClinVar annotation with --no-clinvar." % refdata)
+    return candidates[-1]
 
 
 def find_bundle(refdata):
