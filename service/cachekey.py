@@ -7,6 +7,7 @@ engine version gives new keys rather than stale answers.
 The digest is the only thing that ever becomes a path segment, which is what keeps
 user input out of the filesystem.
 """
+import dataclasses
 import hashlib
 import json
 
@@ -19,19 +20,20 @@ MANIFEST = 'manifest.json'
 
 
 def key_fields(transcript_id, params, ensembl_release, clinvar_version, engine_version):
-    """The exact set design doc 3.1 lists. Ordering is handled by sort_keys."""
-    return {
-        'transcript_id': transcript_id,
-        'ensembl_release': str(ensembl_release),
-        'clinvar_version': str(clinvar_version),
-        'pam': params.pam,
-        'window': params.window,
-        'sg_len': int(params.sg_len),
-        'edit': params.edit,
-        'intron_buffer': int(params.intron_buffer),
-        'filter_gc': bool(params.filter_gc),
-        'engine_version': str(engine_version),
-    }
+    """The exact set design doc 3.1 lists. Ordering is handled by sort_keys.
+
+    The design parameters come from the dataclass rather than a second list of
+    names, so a parameter added to `DesignParams` changes the key instead of being
+    silently left out of it -- which would serve a cached result computed under a
+    different value.
+    """
+    return dict(
+        dataclasses.asdict(params),
+        transcript_id=transcript_id,
+        ensembl_release=str(ensembl_release),
+        clinvar_version=str(clinvar_version),
+        engine_version=str(engine_version),
+    )
 
 
 def cache_key(transcript_id, params, ensembl_release, clinvar_version, engine_version):

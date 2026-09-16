@@ -56,15 +56,18 @@ class Settings:
 
     @classmethod
     def from_env(cls, env=None):
+        # Defaults are read off the fields above rather than repeated here, so
+        # Settings() and Settings.from_env() cannot drift apart.
         env = os.environ if env is None else env
         return cls(
-            refdata=env.get('REFDATA') or 'refdata',
-            clinvar_db=env.get('CLINVAR_DB') or '',
-            results_dir=env.get('RESULTS_DIR') or 'results',
-            max_jobs=_bounded_int(env, 'MAX_JOBS', 2, 1, MAX_JOBS_LIMIT),
-            job_timeout=_bounded_int(env, 'JOB_TIMEOUT', 300, 1, JOB_TIMEOUT_LIMIT),
-            failure_ttl=_bounded_int(env, 'FAILURE_TTL', 300, 0, 86400),
-            rate_burst=_bounded_int(env, 'RATE_BURST', 5, 1, 1000),
-            rate_seconds=_bounded_int(env, 'RATE_SECONDS', 30, 1, 3600),
-            trusted_proxy=_flag(env, 'TRUSTED_PROXY'),
+            refdata=env.get('REFDATA') or cls.refdata,
+            clinvar_db=env.get('CLINVAR_DB') or cls.clinvar_db,
+            results_dir=env.get('RESULTS_DIR') or cls.results_dir,
+            max_jobs=_bounded_int(env, 'MAX_JOBS', cls.max_jobs, 1, MAX_JOBS_LIMIT),
+            job_timeout=_bounded_int(env, 'JOB_TIMEOUT', cls.job_timeout, 1,
+                                     JOB_TIMEOUT_LIMIT),
+            failure_ttl=_bounded_int(env, 'FAILURE_TTL', cls.failure_ttl, 0, 86400),
+            rate_burst=_bounded_int(env, 'RATE_BURST', cls.rate_burst, 1, 1000),
+            rate_seconds=_bounded_int(env, 'RATE_SECONDS', cls.rate_seconds, 1, 3600),
+            trusted_proxy=_flag(env, 'TRUSTED_PROXY', cls.trusted_proxy),
         )

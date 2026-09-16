@@ -12,6 +12,8 @@ import contextlib
 import csv
 import gzip
 import io
+import itertools
+import json
 import logging
 import os
 
@@ -121,8 +123,9 @@ def create_app(settings=None):
         key = cache_key(transcript_id, params, references.release,
                         references.clinvar_version, ENGINE_VERSION)
 
-        if app.state.storage.exists(manifest_key(key)):
-            return _table(request, key, transcript_id, params)
+        manifest = _manifest(app.state.storage, key)
+        if manifest is not None:
+            return _table(request, key, transcript_id, params, manifest)
 
         failed = app.state.pool.failure(key)
         if failed:
@@ -145,32 +148,43 @@ def create_app(settings=None):
 
         return page(request, 'running.html', transcript_id=transcript_id, key=key)
 
-    def _table(request, key, transcript_id, params):
-        header, rows, total = _read_designs(app.state.storage, key)
+    def _table(request, key, transcript_id, params, manifest):
+        header, rows = _read_designs(app.state.storage, key)
         return page(request, 'table.html', transcript_id=transcript_id, params=params,
-                    key=key, header=header, rows=rows, total=total,
-                    shown=len(rows), preview_rows=PREVIEW_ROWS)
+                    key=key, header=header, rows=rows,
+                    total=manifest.get('designs', len(rows)), shown=len(rows))
 
     return app
+
+
+def _manifest(storage, key):
+    """The manifest for a key, or None if this result is not cached.
+
+    The manifest is written last, so finding it means the objects behind it are
+    complete. Reading it here rather than testing for it costs the same stat and
+    yields the row count, which saves parsing the whole designs file for it.
+    """
+    try:
+        return json.loads(storage.get(manifest_key(key)))
+    except KeyError:
+        return None
 
 
 def _read_designs(storage, key, limit=PREVIEW_ROWS):
     """The first `limit` design rows, for the slice 1 table.
 
+    Decompressed lazily and cut off with islice: TTN is 25,662 rows, and inflating
+    and parsing all of them to show 200 is work the page never uses. The row count
+    comes from the manifest instead.
+
     Reads only a file this app wrote, at a key built from a digest.
     """
     raw = storage.get(result_key(key, 'designs'))
-    text = io.TextIOWrapper(io.BytesIO(gzip.decompress(raw)), encoding='utf-8',
-                            newline='')
-    reader = csv.reader(text, delimiter='\t')
-    header = next(reader, [])
-    rows = []
-    total = 0
-    for row in reader:
-        total += 1
-        if len(rows) < limit:
-            rows.append(row)
-    return header, rows, total
+    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
+        text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
+        reader = csv.reader(text, delimiter='\t')
+        header = next(reader, [])
+        return header, list(itertools.islice(reader, limit))
 
 
 app = create_app()

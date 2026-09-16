@@ -7,10 +7,15 @@ so it guards the path that *starts* a job. Cache hits are cheap and stay unlimit
 The bucket table is bounded. Keying an unbounded dict on a client-controlled value
 would trade a CPU exhaustion problem for a memory one.
 """
+import heapq
 import threading
 import time
 
 MAX_CLIENTS = 4096
+# Pruning drops to this mark rather than to MAX_CLIENTS. Trimming to exactly the
+# limit means the next new client prunes again, so a flood from many addresses --
+# the case the limiter exists for -- would pay a full scan on every request.
+LOW_WATER = MAX_CLIENTS * 3 // 4
 
 
 class TokenBucket(object):
@@ -47,9 +52,11 @@ class TokenBucket(object):
         for client, (_, last) in list(self._buckets.items()):
             if now - last >= full:
                 del self._buckets[client]
-        if len(self._buckets) > MAX_CLIENTS:
-            oldest = sorted(self._buckets, key=lambda c: self._buckets[c][1])
-            for client in oldest[:len(self._buckets) - MAX_CLIENTS]:
+        if len(self._buckets) > LOW_WATER:
+            extra = len(self._buckets) - LOW_WATER
+            oldest = heapq.nsmallest(extra, self._buckets,
+                                     key=lambda c: self._buckets[c][1])
+            for client in oldest:
                 del self._buckets[client]
 
 

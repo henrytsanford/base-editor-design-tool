@@ -8,7 +8,6 @@ Keys are built by the app from a sha256 digest and a fixed filename, never from 
 input directly. `_safe_segments` enforces that anyway: a backend that silently
 resolved '..' would turn any future key-handling mistake into an arbitrary write.
 """
-import errno
 import os
 import re
 
@@ -27,7 +26,9 @@ def _safe_segments(key):
         raise BadKey('empty or padded storage key %r' % key)
     segments = key.split('/')
     for segment in segments:
-        if not SEGMENT.match(segment) or segment in ('.', '..'):
+        # SEGMENT requires an alphanumeric first character, which is also what
+        # rules out '.' and '..'.
+        if not SEGMENT.match(segment):
             raise BadKey('unsafe segment %r in storage key %r' % (segment, key))
     return segments
 
@@ -76,10 +77,8 @@ class LocalStorage(Storage):
         try:
             with open(self.path(key), 'rb') as fh:
                 return fh.read()
-        except IOError as e:
-            if e.errno == errno.ENOENT:
-                raise KeyError(key)
-            raise
+        except FileNotFoundError:
+            raise KeyError(key)
 
     def put(self, key, data):
         """Writes via a temporary file in the same directory, then renames.

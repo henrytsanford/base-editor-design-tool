@@ -8,6 +8,7 @@ checking.
 `ValidationError` carries a message written for the person who typed the URL. It
 never quotes a filesystem path or an internal exception.
 """
+import dataclasses
 import re
 
 from bedesign.engine import ALL_EDITS, DesignParams, UnknownBaseEditor
@@ -28,7 +29,10 @@ EDITS = tuple(ALL_EDITS) + ('all',)
 # Parameters that describe the editor itself. Giving these alongside a preset is
 # ambiguous -- which one wins? -- so it is refused rather than silently resolved.
 EDITOR_PARAMS = ('pam', 'window', 'sg_len', 'edit')
-DESIGN_PARAMS = ('transcript', 'preset') + EDITOR_PARAMS + ('intron_buffer', 'filter_gc')
+# Every design parameter is accepted by name, taken from the dataclass so a new one
+# does not have to be added here as well to stop being rejected as unknown.
+DESIGN_PARAMS = ('transcript', 'preset') + tuple(
+    f.name for f in dataclasses.fields(DesignParams))
 
 
 class ValidationError(ValueError):
@@ -41,8 +45,7 @@ def _one(query, name):
     Two values for one parameter is how a request tries to make the validator and
     the code that reads it disagree, so it is an error rather than last-wins.
     """
-    values = query.getlist(name) if hasattr(query, 'getlist') else (
-        [query[name]] if name in query else [])
+    values = query.getlist(name)
     if not values:
         return None
     if len(values) > 1:

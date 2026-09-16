@@ -9,6 +9,7 @@ guides, and sending that back through the pool's pickle channel would make the p
 pay for the size of the answer.
 """
 import csv
+import dataclasses
 import gzip
 import io
 import json
@@ -20,7 +21,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 
 from bedesign import (ANNOTATION_COLUMNS, DESIGN_COLUMNS, ENGINE_VERSION,
-                      ERROR_COLUMNS, DesignParams, design_transcript)
+                      ERROR_COLUMNS, design_transcript)
 from bedesign.transcript_source import ClinVarSource, LocalSource
 
 from .cachekey import manifest_key, result_key
@@ -89,8 +90,7 @@ def run_job(key, transcript_id, params, timeout):
     _storage.put(result_key(key, 'clinvar'), _tsv_gz(ANNOTATION_COLUMNS, annotations))
     manifest = {
         'transcript_id': transcript_id,
-        'params': {f: getattr(params, f) for f in
-                   ('pam', 'window', 'sg_len', 'edit', 'intron_buffer', 'filter_gc')},
+        'params': dataclasses.asdict(params),
         'engine_version': ENGINE_VERSION,
         'reference': _source.describe(),
         'clinvar': _clinvar.describe(),
