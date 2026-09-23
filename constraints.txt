@@ -1,0 +1,19 @@
+# Exact versions for the container image.
+#
+# requirements.txt states floors, so that someone installing the CLI is not held
+# to one resolution of pandas. An image wants the opposite: test/golden compares
+# output byte for byte, so the versions that produce those bytes are pinned here
+# and `pytest test/ -q` inside the image is what checks the pin still holds.
+#
+# Applied with `pip install -r requirements-service.txt -c constraints.txt`, so
+# this file names versions and requirements-service.txt names the dependencies.
+pandas==3.0.2
+numpy==2.4.3
+biopython==1.87
+pyfaidx==0.9.0.4
+requests==2.33.1
+fastapi==0.141.1
+uvicorn==0.53.0
+jinja2==3.1.6
+httpx==0.28.1
+pytest==9.0.3

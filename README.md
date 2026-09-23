@@ -95,8 +95,28 @@ download always gives you the complete file rather than the filtered view.
 There is no JavaScript: the search page is a plain form and the table's controls are
 links, which is why the app can serve `script-src 'none'`.
 
-Settings come from the environment: `REFDATA`, `CLINVAR_DB`, `RESULTS_DIR`,
-`MAX_JOBS`, `JOB_TIMEOUT`, `TABLE_CACHE_ROWS`, `TABLE_CACHE_FRAMES`.
+Settings come from the environment, and `service/config.py` is the schema that reads
+them: it carries every name, its default, and the reasoning behind it. `MAX_JOBS` and
+`JOB_TIMEOUT` are the two you are most likely to set; `TRUSTED_PROXY_HOPS` is the one
+worth reading before you set it, since it decides which `X-Forwarded-For` entry, if any,
+the rate limiter believes.
+
+### Running it as a server
+
+The service ships as a container image with the reference bundle baked in;
+`deploy/README.md` covers building, running and deploying it. The image pins its
+dependencies with `constraints.txt`, because `test/golden/` compares output byte for byte
+and `requirements.txt` only states floors.
+
+The hosted copy is meant to be public on Google Cloud Run, with no login: the app's own
+limits on how much work each visitor can start take the place of access control. It is
+access-restricted until those limits are fixed to work behind Cloud Run's front end;
+`deploy/README.md` lists what is left.
+
+One constraint worth knowing: the per-job wall-clock cap uses `signal.SIGALRM`,
+so the service needs a Unix host. On Windows, run the container rather than Python
+directly -- native Windows Python has no `SIGALRM` and the cap silently cannot be
+enforced.
 
 ## Example
 

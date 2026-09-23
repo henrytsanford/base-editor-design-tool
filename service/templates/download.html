@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ transcript_id }} designs{% endblock %}
+{% block content %}
+<h1>{{ transcript_id }}</h1>
+<p class="muted">
+PAM {{ params.pam }} &middot; window {{ params.window }} &middot;
+sgRNA {{ params.sg_len }} nt &middot; edit {{ params.edit }} &middot;
+intron buffer {{ params.intron_buffer }} &middot;
+GC filter {{ params.filter_gc }}
+</p>
+
+<p class="status">{{ '{:,}'.format(total) }} guides &mdash; too many to show as a table
+here (the limit is {{ '{:,}'.format(limit) }}). The complete result is in the files below.</p>
+
+<p class="downloads">Download:
+{% for name, url in downloads %}<a href="{{ url }}">{{ name }}.tsv.gz</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+
+<p class="muted">A narrower editor, a single edit type or a smaller intron buffer gives
+fewer guides.</p>
+{% endblock %}

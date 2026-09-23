@@ -1,8 +1,7 @@
 """Settings, read from the environment.
 
 Everything here is explicit and local. There are no secrets, and no default that
-points outside the repository -- the S3 settings the design doc lists (BUCKET,
-ENSEMBL_RELEASE, CLINVAR_VERSION) arrive with S3Storage at M2.
+points outside the repository.
 
 Numeric settings are clamped rather than trusted. A MAX_JOBS of 10000 in a stray
 environment variable would otherwise fork until the machine died.
@@ -13,6 +12,7 @@ from dataclasses import dataclass
 # Upper bounds exist so a typo in the environment cannot exhaust the host.
 MAX_JOBS_LIMIT = 16
 JOB_TIMEOUT_LIMIT = 3600
+MAX_PROXY_HOPS = 5
 
 
 def _bounded_int(env, name, default, low, high):
@@ -26,13 +26,6 @@ def _bounded_int(env, name, default, low, high):
     if not low <= value <= high:
         raise ValueError('%s must be between %d and %d, got %d' % (name, low, high, value))
     return value
-
-
-def _flag(env, name, default=False):
-    raw = env.get(name)
-    if raw is None or raw == '':
-        return default
-    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 @dataclass(frozen=True)
@@ -56,14 +49,31 @@ class Settings:
     # count of frames alone would not bound memory at all.
     table_cache_rows: int = 100000
     table_cache_frames: int = 8
-    # Off by default and deliberately so: see trust_client_ip below.
-    trusted_proxy: bool = False
+    # Results with more guides than this are offered as downloads only, never parsed
+    # into a table. The default preset makes ~20x the guides of an NGG editor, and
+    # TTN at edit=all is 517k of them: a 687 MB frame. 50,000 rows is ~65 MB, and
+    # leaves every result of an ordinary gene viewable.
+    table_max_rows: int = 50000
+    # Size budget for RESULTS_DIR, which is in memory on Cloud Run. Past it, the
+    # least recently viewed results are deleted after each job (storage.evict).
+    results_max_mb: int = 1024
+    # How many proxies in front append to X-Forwarded-For. 0, the default, ignores
+    # the header: with nothing in front, any client can set it. Cloud Run alone is 1.
+    # See ratelimit.client_ip.
+    trusted_proxy_hops: int = 0
 
     @classmethod
     def from_env(cls, env=None):
         # Defaults are read off the fields above rather than repeated here, so
         # Settings() and Settings.from_env() cannot drift apart.
         env = os.environ if env is None else env
+        if (env.get('TRUSTED_PROXY') or '').strip().lower() in ('1', 'true', 'yes', 'on'):
+            # Refused rather than ignored. A deployment setting it expects the header
+            # to be trusted, and would otherwise run with a limiter that silently
+            # ignores it; better to find out at startup. 'false' asks for what
+            # TRUSTED_PROXY_HOPS=0 does anyway, so it passes.
+            raise ValueError('TRUSTED_PROXY is no longer read; set TRUSTED_PROXY_HOPS '
+                             'to the number of proxies in front (Cloud Run alone is 1)')
         return cls(
             refdata=env.get('REFDATA') or cls.refdata,
             clinvar_db=env.get('CLINVAR_DB') or cls.clinvar_db,
@@ -78,5 +88,10 @@ class Settings:
                                           cls.table_cache_rows, 0, 10000000),
             table_cache_frames=_bounded_int(env, 'TABLE_CACHE_FRAMES',
                                             cls.table_cache_frames, 1, 256),
-            trusted_proxy=_flag(env, 'TRUSTED_PROXY', cls.trusted_proxy),
+            table_max_rows=_bounded_int(env, 'TABLE_MAX_ROWS', cls.table_max_rows,
+                                        0, 10000000),
+            results_max_mb=_bounded_int(env, 'RESULTS_MAX_MB', cls.results_max_mb,
+                                        1, 1000000),
+            trusted_proxy_hops=_bounded_int(env, 'TRUSTED_PROXY_HOPS',
+                                            cls.trusted_proxy_hops, 0, MAX_PROXY_HOPS),
         )

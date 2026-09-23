@@ -4,6 +4,9 @@ Offline: the golden MAP2K1 designs file is a real engine output with 560 guides,
 both strands, ClinVar matches and multi-edit guides, which is everything the table
 has to cope with. No bundle and no HTTP.
 """
+import threading
+import time
+
 import pytest
 
 from bedesign import DESIGN_COLUMNS
@@ -149,6 +152,59 @@ def test_the_cache_parses_once_per_key(raw):
     first = cache.get('a' * 64, load)
     assert cache.get('a' * 64, load) is first
     assert len(calls) == 1
+
+
+def test_simultaneous_misses_on_one_key_share_one_parse(raw):
+    """Parsing separately would multiply a large result's memory by the number of
+    requests waiting for it."""
+    cache = ResultCache()
+    calls = []
+    release = threading.Event()
+
+    def load():
+        calls.append(1)
+        release.wait(5)
+        return ResultTable(raw, DESIGN_COLUMNS)
+
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(cache.get('k', load)))
+               for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.2)  # let every thread reach the cache before the parse finishes
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(calls) == 1
+    assert len(got) == 8 and all(table is got[0] for table in got)
+
+
+def test_a_failed_parse_reaches_every_waiter_and_is_retried(raw):
+    cache = ResultCache()
+    release = threading.Event()
+
+    def fails():
+        release.wait(5)
+        raise KeyError('evicted')
+
+    errors = []
+
+    def view():
+        try:
+            cache.get('k', fails)
+        except KeyError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=view) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.2)
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(errors) == 3
+    # Nothing was cached, and nothing is left waiting: the next view parses afresh.
+    assert cache.get('k', lambda: ResultTable(raw, DESIGN_COLUMNS)).total == 560
 
 
 def test_the_cache_evicts_by_rows_not_by_entries(raw):

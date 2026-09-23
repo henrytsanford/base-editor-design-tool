@@ -1,0 +1,23 @@
+# The reference bundle is 2.5 GB and belongs only to the image that
+# deploy/Dockerfile.bundled builds, and that build uses refdata/ as its context
+# rather than this one. Keeping it out here is what makes `docker build .` take
+# seconds.
+refdata/
+variant_summary.txt
+
+# Written by the service and by the CLI; both are output, never input.
+results/
+*_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+
+# Local-only planning documents, gitignored and not part of the service.
+docs/
+CLAUDE.md
+
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.DS_Store

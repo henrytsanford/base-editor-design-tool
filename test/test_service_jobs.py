@@ -1,29 +1,50 @@
-"""The job table: deduplication, the busy path, failures and the timeout.
+"""The job table: deduplication, the busy paths, failures, crashes and the timeout.
 
 The pool is replaced with a fake so these run offline and deterministically. What is
 under test is the bookkeeping in JobPool, not the design engine.
 """
+import threading
 import time
 from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 
 import pytest
 
 import service.jobs as jobs
 from service.config import Settings
-from service.jobs import JobPool, JobTimeout, PoolBusy
+from service.jobs import ClientBusy, JobPool, JobTimeout, PoolBusy
 
 
 class FakeExecutor(object):
     def __init__(self, **kwargs):
         self.calls = []
+        self.broken = False
+        self.shut_down = False
+        # ProcessPoolExecutor fails a broken pool's futures while holding this
+        # non-reentrant lock, which is what makes shutdown() from a done-callback
+        # deadlock. Modelled so the tests below can hold it the same way.
+        self.shutdown_lock = threading.Lock()
 
     def submit(self, fn, *args):
+        if self.broken:
+            raise BrokenProcessPool('a child process terminated abruptly')
         future = Future()
         self.calls.append((args, future))
         return future
 
     def shutdown(self, **kwargs):
-        pass
+        if not self.shutdown_lock.acquire(timeout=1):
+            raise AssertionError('shutdown() would deadlock: its lock is held')
+        self.shutdown_lock.release()
+        self.shut_down = True
+
+    def break_(self):
+        """Fails every pending future the way a broken pool does: under its lock."""
+        self.broken = True
+        with self.shutdown_lock:
+            for _, future in self.calls:
+                if not future.done():
+                    future.set_exception(BrokenProcessPool('terminated abruptly'))
 
 
 class FakeReferences(object):
@@ -103,6 +124,124 @@ def test_resubmitting_clears_a_previous_failure(pool):
     assert pool.failure('key') is not None
     pool.submit('key', 'ENST1', None)
     assert pool.failure('key') is None
+
+
+def test_a_client_runs_one_job_at_a_time(pool):
+    """Without this, one client could hold every worker inside its rate limit."""
+    assert pool.submit('a', 'ENST1', None, client='1.2.3.4') is True
+    assert pool.client_busy('1.2.3.4') is True
+    with pytest.raises(ClientBusy):
+        pool.submit('b', 'ENST2', None, client='1.2.3.4')
+    assert pool.submit('c', 'ENST3', None, client='5.6.7.8') is True
+
+
+def test_joining_a_running_job_is_not_a_second_job(pool):
+    """A client polling its own design, or anyone asking for one already running,
+    joins it rather than being turned away."""
+    pool.submit('a', 'ENST1', None, client='1.2.3.4')
+    assert pool.submit('a', 'ENST1', None, client='1.2.3.4') is False
+    assert pool.submit('a', 'ENST1', None, client='5.6.7.8') is False
+    assert pool.client_busy('5.6.7.8') is False
+
+
+def test_a_client_is_free_once_its_job_ends(pool):
+    pool.submit('a', 'ENST1', None, client='1.2.3.4')
+    pool._pool.calls[0][1].set_exception(RuntimeError('boom'))
+    assert pool.client_busy('1.2.3.4') is False
+    assert pool.submit('b', 'ENST2', None, client='1.2.3.4') is True
+
+
+def test_a_dead_worker_replaces_the_pool(pool):
+    """ProcessPoolExecutor never recovers from a worker killed outright; every
+    later submit would raise, and the service would be down until restarted."""
+    pool.submit('a', 'ENST1', None, client='1.2.3.4')
+    first = pool._pool
+    first.break_()
+    assert pool._pool is not first
+    assert pool.failure('a') == 'This design failed. Reload to try again.'
+    assert pool.client_busy('1.2.3.4') is False
+    assert pool.submit('b', 'ENST2', None) is True
+    assert len(pool._pool.calls) == 1
+
+
+def test_jobs_failing_together_replace_the_pool_once(pool):
+    pool.submit('a', 'ENST1', None)
+    pool.submit('b', 'ENST2', None)
+    first = pool._pool
+    first.break_()
+    second = pool._pool
+    assert second is not first
+    assert pool.submit('c', 'ENST3', None) is True
+    assert pool._pool is second and len(second.calls) == 1
+
+
+def test_replacing_a_broken_pool_does_not_shut_it_down_from_its_callback(pool):
+    """The deadlock a real SIGKILL found: ProcessPoolExecutor runs done-callbacks
+    while holding its shutdown lock, so shutdown() there never returns and every
+    request then blocks on JobPool's lock."""
+    pool.submit('a', 'ENST1', None)
+    first = pool._pool
+    first.break_()  # the fake's shutdown() raises if called while this lock is held
+    assert not first.shut_down
+
+
+def test_a_pool_that_broke_while_idle_is_replaced_on_submit(pool):
+    """A worker can die with no job running, so no future reports it."""
+    first = pool._pool
+    first.broken = True
+    assert pool.submit('a', 'ENST1', None) is True
+    assert pool._pool is not first and len(pool._pool.calls) == 1
+
+
+def test_health_reports_a_crash_until_a_job_next_finishes(pool):
+    assert pool.healthy() is True
+    pool.submit('a', 'ENST1', None)
+    pool._pool.break_()
+    assert pool.healthy() is False
+    pool.submit('b', 'ENST2', None)
+    pool._pool.calls[0][1].set_result({})
+    assert pool.healthy() is True
+
+
+def test_an_ordinary_failure_is_not_a_crash(pool):
+    pool.submit('a', 'ENST1', None)
+    first = pool._pool
+    first.calls[0][1].set_exception(JobTimeout('too slow'))
+    assert pool.healthy() is True and pool._pool is first
+
+
+def hooked_pool(monkeypatch, hook):
+    monkeypatch.setattr(jobs, 'ProcessPoolExecutor',
+                        lambda **kwargs: FakeExecutor(**kwargs))
+    return JobPool(FakeReferences(), Settings(max_jobs=2), after_job=hook)
+
+
+def test_the_after_job_hook_runs_once_a_result_is_written(monkeypatch):
+    """What keeps RESULTS_DIR under its budget: it runs after each new result."""
+    calls = []
+    pool = hooked_pool(monkeypatch, lambda: calls.append(1))
+    pool.submit('a', 'ENST1', None)
+    pool._pool.calls[0][1].set_result({})
+    assert calls == [1]
+
+
+def test_the_after_job_hook_does_not_run_for_a_failure(monkeypatch):
+    calls = []
+    pool = hooked_pool(monkeypatch, lambda: calls.append(1))
+    pool.submit('a', 'ENST1', None)
+    pool._pool.calls[0][1].set_exception(RuntimeError('boom'))
+    assert calls == []
+
+
+def test_a_failing_hook_does_not_fail_the_design(monkeypatch):
+    def hook():
+        raise OSError('disk trouble')
+
+    pool = hooked_pool(monkeypatch, hook)
+    pool.submit('a', 'ENST1', None, client='1.2.3.4')
+    pool._pool.calls[0][1].set_result({})
+    assert pool.failure('a') is None and pool.running('a') is False
+    assert pool.client_busy('1.2.3.4') is False
 
 
 def test_the_worker_timeout_interrupts_a_slow_design(monkeypatch):

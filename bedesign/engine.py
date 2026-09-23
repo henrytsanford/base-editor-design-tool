@@ -9,6 +9,7 @@ The three outputs are the three files the CLI writes, as lists of rows under
 DESIGN_COLUMNS, ERROR_COLUMNS and ANNOTATION_COLUMNS.
 """
 import re
+from collections import namedtuple
 from dataclasses import dataclass
 
 from .transcript_source import empty_variants
@@ -514,14 +515,52 @@ def get_genomic_pos_list(edit_indices, gene_strand, sgrna_strand, sg_gen_pos):
 	return codon_pos_list, edit_gen_pos_list
 
 
+class VariantIndex(object):
+	"""One gene's ClinVar variants, looked up by genomic position.
+
+	get_snps asks, once per edit, which variants sit at a codon's few positions.
+	Scanning the gene's whole variant list for that made annotation most of a run
+	-- TTN has 34,783 variants, and a near-PAMless editor makes hundreds of
+	thousands of edits -- so the positions are indexed once per transcript.
+
+	Rows come back in the order the variant table lists them, as namedtuples of the
+	same values `iterrows` would put in a Series for that selection. Together that
+	keeps the annotation output byte-identical to a boolean mask over the table,
+	without paying pandas' per-attribute lookup on every field read.
+	"""
+	COLUMNS = ['Name', 'ClinicalSignificance', 'ClinVar_SNP_Position',
+			   'ReferenceAllele', 'AlternateAllele', 'ReviewStatus']
+	Row = namedtuple('Variant', COLUMNS)
+
+	def __init__(self, gene_variant_df):
+		# Mixed dtypes, so this is an object array: the values iterrows builds from.
+		self._values = gene_variant_df.loc[:, self.COLUMNS].values
+		self._at = {}
+		for i, position in enumerate(gene_variant_df['ClinVar_SNP_Position'].tolist()):
+			self._at.setdefault(position, []).append(i)
+		self._rows = {}
+
+	def rows_at(self, positions):
+		"""The variants at any of `positions`, in table order. Empty if none."""
+		found = sorted({i for position in set(positions)
+						for i in self._at.get(position, ())})
+		return [self._row(i) for i in found]
+
+	def _row(self, i):
+		# Built on first use: most variants in a gene are never hit.
+		row = self._rows.get(i)
+		if row is None:
+			row = self._rows[i] = self.Row._make(self._values[i])
+		return row
+
+
 '''
 Returns dataframe containing information about the pathogenicity and position of SNPs created by edit
 '''
-def get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, gene_variant_df, aa_map):
+def get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, variants, aa_map):
 	snp_type_list = []
 	snp_info = []
 	edit_nuc, edit_to = edit.split('-')
-	all_snps = gene_variant_df['ClinVar_SNP_Position'].tolist()
 	# Iterate through all amino acid changes
 	for k,v in edit_map.items():
 		temp_snp_type_list = []
@@ -553,10 +592,10 @@ def get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, gene_variant
 			aa_num = ''
 			aa_to = ''
 		codon_pos_list, edit_gen_pos_list = get_genomic_pos_list(edit_indices, gene_strand, sgrna_strand, sg_gen_pos)
-		# Check if there is any overlap between codon_pos_list and all_snps
-		if any(i in codon_pos_list for i in all_snps):
-			clinvar_snps_df = gene_variant_df[gene_variant_df.ClinVar_SNP_Position.isin(codon_pos_list)].loc[:,['Name','ClinicalSignificance','ClinVar_SNP_Position','ReferenceAllele','AlternateAllele','ReviewStatus']]
-			for index,row in clinvar_snps_df.iterrows():
+		# ClinVar SNPs at any position in codon_pos_list
+		clinvar_snps = variants.rows_at(codon_pos_list)
+		if clinvar_snps:
+			for row in clinvar_snps:
 				snp_aa, snp_aa_from, snp_aa_num, snp_aa_to = parse_snp_name(row.Name, aa_map)
 				# First check for nucleotide position
 				if str(row.ClinVar_SNP_Position) not in edit_gen_pos_list:
@@ -606,7 +645,7 @@ def get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, gene_variant
 									 new_codon,
 									 edit_cat,
 									 snp_aa] +
-									 row.tolist() +
+									 list(row) +
 									 [same_nucleotide_pos,
 									 same_nucleotide_change,
 									 same_aa_pos,
@@ -786,7 +825,7 @@ def get_edits(edit_map, context, window, edit, sgrna_trans, codon_map, j, sgrna_
 '''
 Returns edits for sgRNA, also returns number of silent edits
 '''
-def get_edit_info(context, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, gene_variant_df, aa_map, filter_gc, sgrna_context):
+def get_edit_info(context, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, variants, aa_map, filter_gc, sgrna_context):
 	window_start, window_end = window.split('-')
 	sgrna_window = sgrna[int(window_start)-1:int(window_end)]
 	j_window = int(window_start)-1
@@ -801,7 +840,7 @@ def get_edit_info(context, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, 
 		# is nothing for get_snps to match against. The caller checks cds_error
 		# and writes an error row.
 		return edit_map, window_silent, cds_error, num_stop, '', [], transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele
-	snp_type_list, snp_info = get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, gene_variant_df, aa_map)
+	snp_type_list, snp_info = get_snps(edit_map, edit, sg_gen_pos, gene_strand, sgrna_strand, variants, aa_map)
 	clinical_sig = get_clinical_sig(snp_type_list)
 	return edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele
 
@@ -869,7 +908,7 @@ def get_context_for_trans(ct_index, ct_index_check, abs_pos, pos_for_index, cds_
 '''
 Designs sgRNAs for specified PAM sequence and writes to output    
 '''
-def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, abs_pos, pos_for_index, fs, cds_map, utr, t, pam, exons, gene_strand, edit, window, cds_sequence, pam_len, sg_len, cds_start_exon, errors, annotations, gene_variant_df, aa_map, codon_map, input_type, intron_buffer, filter_gc):
+def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, abs_pos, pos_for_index, fs, cds_map, utr, t, pam, exons, gene_strand, edit, window, cds_sequence, pam_len, sg_len, cds_start_exon, errors, annotations, variants, aa_map, codon_map, input_type, intron_buffer, filter_gc):
 	current_exon = cds_start_exon
 	for i,e in enumerate(exons):
 		e = e.split(':')
@@ -958,7 +997,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 				if context_for_trans != '':
 					sg_gen_pos = pos_for_index[sgrna_end_pos]
 					sgrna_trans = get_sgrna_translated_seq(sgrna_for_trans, cds_map, abs_pos, pos_for_index, fs, sgrna_start_pos, gene_strand, sgrna_strand, utr, e, label)
-					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, gene_variant_df, aa_map, filter_gc, sgrna_context)
+					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, variants, aa_map, filter_gc, sgrna_context)
 					if cds_error != '':
 						errors.append([gene_name, t, sgrna, sgrna_strand, cds_error])
 						return 0
@@ -1019,7 +1058,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 				if context_for_trans != '':
 					sg_gen_pos = pos_for_index[sgrna_start_pos]
 					sgrna_trans = get_sgrna_translated_seq(sgrna, cds_map, abs_pos, pos_for_index, fs, sgrna_start_pos, gene_strand, sgrna_strand, utr, e, label)
-					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, gene_variant_df, aa_map, filter_gc, sgrna_context)
+					edit_map, window_silent, cds_error, num_stop, clinical_sig, snp_info, transcript_ref_allele, transcript_alt_allele, genome_ref_allele, genome_alt_allele = get_edit_info(context_for_trans, sgrna, sgrna_strand, edit, window, pam, sgrna_trans, codon_map, sg_gen_pos, gene_strand, variants, aa_map, filter_gc, sgrna_context)
 					if cds_error != '':
 						errors.append([gene_name, t, sgrna, sgrna_strand, cds_error])
 						return 0
@@ -1177,12 +1216,14 @@ def _run_edits(designs, errors, annotations, params, **shared):
 	are design_sgrnas parameter names, so it forwards straight through.
 	"""
 	pos_for_index = PosForIndex(shared['abs_pos'], shared['gene_strand'])
+	variants = VariantIndex(shared.pop('gene_variant_df'))
 	codon_map = get_codon_map()
 	aa_map = get_aa_map()
 	for edit in params.edits:
 		design_sgrnas(
 			designs=designs, errors=errors, annotations=annotations,
 			pos_for_index=pos_for_index, aa_map=aa_map, codon_map=codon_map,
+			variants=variants,
 			edit=edit, pam=params.pam, pam_len=len(params.pam),
 			window=params.window, sg_len=params.sg_len,
 			intron_buffer=params.intron_buffer, filter_gc=params.filter_gc,

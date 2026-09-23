@@ -1,4 +1,4 @@
-"""The cache key: design doc 3.1.
+"""The cache key.
 
 sha256 of canonical JSON over the resolved parameters, so a preset and the explicit
 parameters it resolves to share one result, and a new reference release or a bumped
@@ -17,10 +17,12 @@ RESULT_FILES = {
     'clinvar': 'clinvar.tsv.gz',
 }
 MANIFEST = 'manifest.json'
+# The prefix every result lives under, and what storage.evict sweeps.
+RESULTS = 'results'
 
 
 def key_fields(transcript_id, params, ensembl_release, clinvar_version, engine_version):
-    """The exact set design doc 3.1 lists. Ordering is handled by sort_keys.
+    """Ordering is handled by sort_keys.
 
     The design parameters come from the dataclass rather than a second list of
     names, so a parameter added to `DesignParams` changes the key instead of being
@@ -47,7 +49,7 @@ def cache_key(transcript_id, params, ensembl_release, clinvar_version, engine_ve
 def result_prefix(key):
     """Where a key's objects live. Two hex characters of fan-out keeps any one
     directory from collecting every result the service has ever computed."""
-    return 'results/%s/%s' % (key[:2], key)
+    return '%s/%s/%s' % (RESULTS, key[:2], key)
 
 
 def result_key(key, name):
