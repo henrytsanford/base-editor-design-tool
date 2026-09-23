@@ -28,9 +28,10 @@ from fastapi.templating import Jinja2Templates
 from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
 from bedesign.engine import ALL_EDITS, BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
-from .cachekey import RESULT_FILES, cache_key, manifest_key, result_key
+from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
+                       result_key)
 from .config import Settings
-from .jobs import JobPool, PoolBusy
+from .jobs import ClientBusy, JobPool, PoolBusy
 from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PARAMS,
                      INTRON_BUFFER_RANGE, SG_LEN_RANGE, STRANDS, VIEW_PARAMS,
                      ValidationError, parse_designs_query, parse_download_query,
@@ -113,8 +114,13 @@ def create_app(settings=None):
     @contextlib.asynccontextmanager
     async def lifespan(app):
         app.state.references = References(settings.refdata, settings.clinvar_db)
-        app.state.storage = LocalStorage(settings.results_dir)
-        app.state.pool = JobPool(app.state.references, settings)
+        storage = app.state.storage = LocalStorage(settings.results_dir)
+        app.state.pool = JobPool(
+            app.state.references, settings,
+            # After every result is written: RESULTS_DIR is in memory on Cloud Run,
+            # so it is kept under a budget rather than left to fill the instance.
+            after_job=lambda: storage.evict(RESULTS, MANIFEST,
+                                            settings.results_max_mb * 2 ** 20))
         app.state.limiter = TokenBucket(settings.rate_burst, settings.rate_seconds)
         app.state.tables = ResultCache(settings.table_cache_rows,
                                        settings.table_cache_frames)
@@ -149,7 +155,13 @@ def create_app(settings=None):
 
     @app.get('/healthz')
     def healthz():
-        return JSONResponse({'status': 'ok', 'engine_version': ENGINE_VERSION})
+        # A 503 once a worker has died, until a job next finishes on the replacement
+        # pool. Answering 'ok' regardless would leave a liveness probe nothing to see.
+        healthy = app.state.pool.healthy()
+        return JSONResponse(
+            {'status': 'ok' if healthy else 'worker crashed',
+             'engine_version': ENGINE_VERSION},
+            status_code=200 if healthy else 503)
 
     @app.get('/robots.txt', response_class=PlainTextResponse)
     def robots():
@@ -211,25 +223,37 @@ def create_app(settings=None):
                         references.clinvar_version, ENGINE_VERSION)
 
         manifest = _manifest(app.state.storage, key)
+        if manifest is not None and manifest.get('designs', 0) > settings.table_max_rows:
+            return _download_only(request, transcript_id, params, manifest)
         if manifest is not None:
             try:
                 return _table(request, key, transcript_id, params, view, manifest)
             except UnknownFilterValue as e:
                 return bad_request(
                     request, 'No guide in this result is annotated %s.' % e)
+            except KeyError:
+                # Evicted between reading the manifest and reading the designs.
+                # Treated as uncached, so the request recomputes it below.
+                pass
 
         failed = app.state.pool.failure(key)
         if failed:
             return page(request, 'error.html', status_code=500, message=failed)
 
         if not app.state.pool.running(key):
-            client = client_ip(request, settings.trusted_proxy)
+            client = client_ip(request, settings.trusted_proxy_hops)
+            # Checked before the limiter, so the retrying page below does not spend
+            # the client's tokens while its first design finishes.
+            if app.state.pool.client_busy(client):
+                return _client_busy(request)
             if not app.state.limiter.allow(client):
                 return page(request, 'error.html', status_code=429,
                             message='Too many designs started from here. '
                                     'Wait a moment and reload.')
             try:
-                started = app.state.pool.submit(key, transcript_id, params)
+                started = app.state.pool.submit(key, transcript_id, params, client)
+            except ClientBusy:
+                return _client_busy(request)
             except PoolBusy:
                 response = page(request, 'busy.html', status_code=503)
                 response.headers['Retry-After'] = str(POLL_SECONDS)
@@ -268,6 +292,16 @@ def create_app(settings=None):
         filename = '%s_%s' % (transcript_id, RESULT_FILES[name])
         return Response(content=data, media_type='application/gzip', headers={
             'Content-Disposition': 'attachment; filename="%s"' % filename})
+
+    def _client_busy(request):
+        # One design at a time per client (jobs.JobPool). The page retries like the
+        # busy page, and starts this design once the other one has finished.
+        response = page(request, 'busy.html', status_code=429,
+                        message='You already have a design running. This one starts '
+                                'when that finishes; this page retries every %d '
+                                'seconds.' % POLL_SECONDS)
+        response.headers['Retry-After'] = str(POLL_SECONDS)
+        return response
 
     def _table(request, key, transcript_id, params, view, manifest):
         storage = app.state.storage
@@ -312,11 +346,24 @@ def create_app(settings=None):
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
             hidden=[(name, values[name]) for name in DESIGN_PARAMS + ('sort', 'dir')
                     if values.get(name)],
-            downloads=[(name, build_url('/designs/download', values, DOWNLOAD_PARAMS,
-                                        file=name))
-                       for name in RESULT_FILES])
+            downloads=_downloads(values))
+
+    def _download_only(request, transcript_id, params, manifest):
+        # Past TABLE_MAX_ROWS the parsed frame would cost more memory than a view is
+        # worth (~1.3 KB a row), so the result is never parsed; the files are the
+        # result, byte-identical to what the CLI writes.
+        return page(
+            request, 'download.html', transcript_id=transcript_id, params=params,
+            total=manifest['designs'], limit=settings.table_max_rows,
+            downloads=_downloads(values_of(request.query_params)))
 
     return app
+
+
+def _downloads(values):
+    """Download links for a result: the design parameters, and nothing else."""
+    return [(name, build_url('/designs/download', values, DOWNLOAD_PARAMS, file=name))
+            for name in RESULT_FILES]
 
 
 def _manifest(storage, key):
@@ -327,7 +374,10 @@ def _manifest(storage, key):
     yields the row count, which saves parsing the whole designs file for it.
     """
     try:
-        return json.loads(storage.get(manifest_key(key)))
+        manifest = json.loads(storage.get(manifest_key(key)))
+        # A view is a use: storage.evict deletes the least recently touched first.
+        storage.touch(manifest_key(key))
+        return manifest
     except KeyError:
         return None
 

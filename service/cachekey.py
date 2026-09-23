@@ -17,6 +17,8 @@ RESULT_FILES = {
     'clinvar': 'clinvar.tsv.gz',
 }
 MANIFEST = 'manifest.json'
+# The prefix every result lives under, and what storage.evict sweeps.
+RESULTS = 'results'
 
 
 def key_fields(transcript_id, params, ensembl_release, clinvar_version, engine_version):
@@ -47,7 +49,7 @@ def cache_key(transcript_id, params, ensembl_release, clinvar_version, engine_ve
 def result_prefix(key):
     """Where a key's objects live. Two hex characters of fan-out keeps any one
     directory from collecting every result the service has ever computed."""
-    return 'results/%s/%s' % (key[:2], key)
+    return '%s/%s/%s' % (RESULTS, key[:2], key)
 
 
 def result_key(key, name):

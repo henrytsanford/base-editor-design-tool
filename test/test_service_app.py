@@ -160,13 +160,114 @@ def test_a_busy_pool_says_so_and_asks_for_a_retry(client, monkeypatch):
     assert 'Busy' in response.text
 
 
-def test_starting_jobs_too_fast_is_rate_limited(refdata, clinvar_db, tmp_path):
+def test_a_second_design_from_one_client_waits_without_spending_tokens(
+        refdata, clinvar_db, tmp_path, monkeypatch):
+    """One job per client. The waiting page retries, so it must not charge the
+    client's bucket each time or the retries would rate-limit it."""
+    from fastapi.testclient import TestClient
+    settings = Settings(refdata=refdata, clinvar_db=clinvar_db,
+                        results_dir=str(tmp_path / 'results'), max_jobs=2,
+                        rate_burst=1, rate_seconds=3600)
+    with TestClient(create_app(settings)) as client:
+        monkeypatch.setattr(client.app.state.pool, 'client_busy', lambda c: True)
+        for _ in range(3):
+            response = client.get('/designs?transcript=%s&preset=ABE7.10' % MAP2K1)
+            assert response.status_code == 429
+            assert 'already have a design running' in response.text
+            assert response.headers['retry-after']
+        assert client.app.state.limiter.allow('testclient') is True
+
+
+def test_healthz_fails_after_a_worker_crash(client, monkeypatch):
+    monkeypatch.setattr(client.app.state.pool, 'healthy', lambda: False)
+    response = client.get('/healthz')
+    assert response.status_code == 503
+    assert response.json()['status'] == 'worker crashed'
+
+
+def test_a_result_past_the_table_limit_is_offered_as_downloads_only(
+        refdata, clinvar_db, tmp_path):
+    """Parsing a result with hundreds of thousands of guides would cost the web
+    process hundreds of megabytes, so it is never parsed at all."""
+    from fastapi.testclient import TestClient
+    settings = Settings(refdata=refdata, clinvar_db=clinvar_db,
+                        results_dir=str(tmp_path / 'results'), max_jobs=2,
+                        rate_burst=50, rate_seconds=1, table_max_rows=10)
+    with TestClient(create_app(settings)) as client:
+        response = wait_for_table_or_downloads(client, DESIGNS_URL)
+        assert response.status_code == 200
+        assert 'too many to show as a table' in response.text
+        assert 'sgRNA sequence' not in response.text
+        assert client.app.state.tables.stats()['frames'] == 0
+        link = re.search(r'href="(/designs/download\?[^"]+)"', response.text).group(1)
+        download = client.get(link.replace('&amp;', '&'))
+        assert download.status_code == 200 and download.content[:2] == b'\x1f\x8b'
+
+
+def wait_for_table_or_downloads(client, url, seconds=90):
+    for _ in range(seconds * 2):
+        response = client.get(url)
+        if 'Download:' in response.text or 'sgRNA sequence' in response.text:
+            return response
+        time.sleep(0.5)
+    raise AssertionError('design did not finish within %ds' % seconds)
+
+
+def test_a_result_evicted_mid_view_is_recomputed_not_a_500(client, cached_url,
+                                                            monkeypatch):
+    """The manifest was read, then the designs file was gone: eviction ran between."""
+    storage = client.app.state.storage
+    real_get = storage.get
+
+    def evicted(key):
+        if key.endswith('designs.tsv.gz'):
+            raise KeyError(key)
+        return real_get(key)
+
+    monkeypatch.setattr(storage, 'get', evicted)
+    client.app.state.tables = type(client.app.state.tables)()  # nothing parsed yet
+    response = client.get(cached_url)
+    assert response.status_code == 200
+    assert 'http-equiv="refresh"' in response.text
+
+
+def test_results_are_evicted_to_the_budget_after_each_job(refdata, clinvar_db, tmp_path):
+    from fastapi.testclient import TestClient
+    settings = Settings(refdata=refdata, clinvar_db=clinvar_db,
+                        results_dir=str(tmp_path / 'results'), max_jobs=2,
+                        rate_burst=50, rate_seconds=1, results_max_mb=1)
+    with TestClient(create_app(settings)) as client:
+        client.app.state.storage.evict = evicting = _Recorder(client.app.state.storage.evict)
+        wait_for_table(client, DESIGNS_URL)
+        assert evicting.calls == [('results', 'manifest.json', 2 ** 20)]
+
+
+class _Recorder(object):
+    def __init__(self, fn):
+        self.fn, self.calls = fn, []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.fn(*args)
+
+
+def test_the_download_links_are_separated_by_a_real_middle_dot(client, cached_url):
+    """An entity inside an autoescaped expression renders as the text '&middot;'."""
+    text = client.get(cached_url).text
+    assert '&amp;middot;' not in text
+
+
+def test_starting_jobs_too_fast_is_rate_limited(refdata, clinvar_db, tmp_path,
+                                                monkeypatch):
     """The limiter guards the path that starts work, not cached reads."""
     from fastapi.testclient import TestClient
     settings = Settings(refdata=refdata, clinvar_db=clinvar_db,
                         results_dir=str(tmp_path / 'results'), max_jobs=2,
                         rate_burst=1, rate_seconds=3600)
     with TestClient(create_app(settings)) as client:
+        # The first job is still running when the second request arrives, so the
+        # one-job-per-client check would answer first; this test is about the bucket.
+        monkeypatch.setattr(client.app.state.pool, 'client_busy', lambda c: False)
         assert client.get('/designs?transcript=%s&preset=ABE7.10' % ISY1).status_code == 200
         second = client.get('/designs?transcript=%s&preset=BE4max' % ISY1)
         assert second.status_code == 429

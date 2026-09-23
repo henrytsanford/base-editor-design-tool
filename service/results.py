@@ -19,6 +19,7 @@ import io
 import math
 import threading
 from collections import OrderedDict
+from concurrent.futures import Future
 from dataclasses import dataclass
 
 import numpy as np
@@ -235,7 +236,9 @@ class ResultCache(object):
     TTN's 25,662 guides are ~34 MB and a count of entries would not be a memory bound
     at all. One frame is always admitted even if it alone exceeds the budget, since
     the alternative is that the biggest genes -- the ones that most need the cache --
-    are the only ones that never get it.
+    are the only ones that never get it. That frame is bounded all the same: the app
+    never parses a result with more than `TABLE_MAX_ROWS` guides, and offers only
+    its downloads instead.
     """
 
     def __init__(self, max_rows=100000, max_frames=8):
@@ -244,30 +247,49 @@ class ResultCache(object):
         self._lock = threading.Lock()
         self._tables = OrderedDict()
         self._rows = 0
+        # key -> Future for a parse in progress, so misses on one key share it.
+        self._loading = {}
 
     def get(self, key, load):
         """The parsed table for a key, calling `load()` only on a miss.
 
-        `load` runs outside the lock. Parsing TTN takes tens of milliseconds, and
-        holding the lock across it would make every other view wait for it; the cost
-        is that two simultaneous misses on one key both parse, and one result is then
-        discarded.
+        `load` runs outside the lock, so parsing one result never makes views of
+        another wait. Simultaneous misses on one key share a single `load()`: the
+        first caller parses and the rest wait for its result. Parsing separately
+        would multiply memory by the number of waiting requests, which for a large
+        result is the difference between a slow page and running out of memory.
+
+        If `load()` raises, every caller waiting on it gets the same exception and
+        the next `get` tries again.
         """
         with self._lock:
             table = self._tables.get(key)
             if table is not None:
                 self._tables.move_to_end(key)
                 return table
+            pending = self._loading.get(key)
+            loading = pending is None
+            if loading:
+                pending = self._loading[key] = Future()
+        if not loading:
+            return pending.result()
 
-        table = load()
+        try:
+            table = load()
+        except BaseException as e:
+            with self._lock:
+                del self._loading[key]
+            pending.set_exception(e)
+            raise
 
         with self._lock:
-            if key not in self._tables:
-                self._tables[key] = table
-                self._rows += table.total
+            del self._loading[key]
+            self._tables[key] = table
+            self._rows += table.total
             self._tables.move_to_end(key)
             self._evict()
-            return self._tables[key]
+        pending.set_result(table)
+        return table
 
     def _evict(self):
         """Called with the lock held. Never evicts the entry just inserted."""

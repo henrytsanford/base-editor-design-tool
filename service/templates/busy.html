@@ -3,6 +3,6 @@
 {% block head %}<meta http-equiv="refresh" content="{{ poll_seconds }}">{% endblock %}
 {% block content %}
 <h1>Busy</h1>
-<p class="status">Every worker is designing something else. This page retries every
-{{ poll_seconds }} seconds.</p>
+<p class="status">{% if message %}{{ message }}{% else %}Every worker is designing
+something else. This page retries every {{ poll_seconds }} seconds.{% endif %}</p>
 {% endblock %}

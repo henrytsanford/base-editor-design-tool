@@ -60,15 +60,24 @@ class TokenBucket(object):
                 del self._buckets[client]
 
 
-def client_ip(request, trusted_proxy=False):
+def client_ip(request, proxy_hops=0):
     """Who to charge for this request.
 
-    X-Forwarded-For is read only when the deployment says a proxy sets it. Behind
-    the M2 ALB it carries the real client address, but with nothing in front, any
-    client can set it, which would make the limiter above bypassable with a header.
+    X-Forwarded-For is read only when the deployment says how many proxies sit in
+    front, and then from the right. Each proxy appends the address it received the
+    request from, so the entry `proxy_hops` from the end is the one the outermost
+    trusted proxy wrote. Everything left of it came from the client and can say
+    anything: Google's front end appends to a client-supplied header rather than
+    replacing it, so reading the leftmost entry would let a caller pick a fresh
+    bucket per request.
+
+    A header too short to hold that many entries was not written by the proxies
+    this deployment expects, so it is ignored rather than half-trusted.
     """
-    if trusted_proxy:
+    if proxy_hops:
         forwarded = request.headers.get('x-forwarded-for')
         if forwarded:
-            return forwarded.split(',')[0].strip()[:64]
+            entries = [entry.strip() for entry in forwarded.split(',')]
+            if len(entries) >= proxy_hops and entries[-proxy_hops]:
+                return entries[-proxy_hops][:64]
     return request.client.host if request.client else 'unknown'

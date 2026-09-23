@@ -45,15 +45,52 @@ The first `/designs` call starts a job and returns the running page; the second,
 seconds later, returns the table.
 
 `service/config.py` is the schema for the settings and carries the defaults.
-`TRUSTED_PROXY` must stay `false` on Cloud Run: Google's front end *appends* to a
-client-supplied `X-Forwarded-For` rather than replacing it, and `client_ip` trusts the
-first entry.
+`TRUSTED_PROXY_HOPS` is the number of proxies in front that append to
+`X-Forwarded-For`; `client_ip` reads the entry that many places from the right, because
+Google's front end *appends* to a client-supplied header rather than replacing it, so
+everything to the left is whatever the caller sent. The default, 0, ignores the header,
+which on Cloud Run puts every caller in one rate-limit bucket. Cloud Run alone should be
+1, but measure it on a deployed revision before setting it. The old `TRUSTED_PROXY=true`
+is refused at startup.
 
 The container filesystem does not outlive the container, so `RESULTS_DIR` needs a volume
 if the result cache should survive a restart. Nothing is lost without one -- a result is
-recomputable from its key -- but it is recomputed. Note that nothing expires that
-directory: with a volume it grows until you remove results yourself, and without one it
-grows in memory on Cloud Run, counting against `--memory` for as long as the instance lives.
+recomputable from its key -- but it is recomputed. Either way it is kept under
+`RESULTS_MAX_MB` (default 1024): after each job, the least recently viewed results are
+deleted until the rest fit. On Cloud Run the directory is in memory, so that budget
+counts against `--memory`.
+
+## Access
+
+The service is meant to be public on Cloud Run: anyone with the URL can use it, with no
+login, and its own limits -- a per-client rate limit on starting designs, a bounded worker
+pool, a per-job time cap -- stand in for access control. `--max-instances 1` is what
+bounds the bill, since no amount of traffic can start a second instance.
+
+Until those limits are fixed to work on Cloud Run, it is deployed with
+`--no-allow-unauthenticated`, and only accounts granted `roles/run.invoker` can reach it.
+What has to change first:
+
+- **Identify clients correctly.** Done in code: `TRUSTED_PROXY_HOPS` reads
+  `X-Forwarded-For` from the right. What is left is measuring the hop count on the
+  deployed service and setting it (see "Running").
+- **Price requests, not just count them.** Done: each client gets one running design
+  at a time, and with ClinVar annotation now indexed by position, `JOB_TIMEOUT=60`
+  covers every preset on the largest gene (TTN, 18 s at worst) while cutting off the
+  widest custom requests.
+- **Bound result size.** Done: requests that used to time out now finish, and the
+  largest -- the default near-PAMless editor with `edit=all` on TTN -- would parse into
+  a ~690 MB table. Results with more than `TABLE_MAX_ROWS` guides (50,000) are offered
+  as downloads only, concurrent views of one result share a single parse, and the
+  results folder is kept under `RESULTS_MAX_MB` (1024) by deleting the least recently
+  viewed results after each job.
+- **Survive a dead worker.** Done: a worker killed outright no longer leaves the pool
+  unusable; it is replaced, and `/healthz` reports the crash (see "Watching it").
+
+Then set a billing budget alert, and open it with:
+
+    gcloud run services add-iam-policy-binding bedesign --region "$REGION" \
+        --member=allUsers --role=roles/run.invoker
 
 ## Deploying a change
 
@@ -64,9 +101,14 @@ output changed intentionally, bump `ENGINE_VERSION` so cache keys turn over.
 
 ## Watching it
 
-Logs go to stdout. The things worth noticing, in order: `/healthz` not answering, and the
-service restarting repeatedly rather than once.
+Logs go to stdout. The things worth noticing, in order: `/healthz` not answering, the
+service restarting repeatedly rather than once, and -- once it is public -- the billing
+budget alert. Any request keeps the instance warm, crawlers included, so a public URL
+costs more than its real use would suggest; the budget alert is how you find out.
 
-One caveat on `/healthz`: it returns a static response and does not touch the process
-pool, so it reports `ok` even when every worker is dead. A service that answers `/healthz`
-but 500s on `/designs` is that failure, and no platform health check can see it.
+`/healthz` answers 503 `worker crashed` from a design worker dying until a job next
+finishes normally. The service replaces the pool on its own, so a single 503 is not an
+outage; one that persists means the pool keeps dying. Cloud Run only restarts the
+container on it if an HTTP liveness probe on `/healthz` is configured -- give it a
+failure threshold longer than one design, so it does not kill a job the replacement pool
+is already running.

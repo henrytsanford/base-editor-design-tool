@@ -77,6 +77,6 @@ GC filter {{ params.filter_gc }}
 {% endif %}
 
 <p class="downloads">Download the full result:
-{% for name, url in downloads %}<a href="{{ url }}">{{ name }}.tsv.gz</a>{{ '' if loop.last else ' &middot; ' }}{% endfor %}
+{% for name, url in downloads %}<a href="{{ url }}">{{ name }}.tsv.gz</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}
 <span class="muted">&mdash; the complete file, not the filtered view.</span></p>
 {% endblock %}
