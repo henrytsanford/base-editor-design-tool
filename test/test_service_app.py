@@ -58,6 +58,14 @@ def test_robots_turns_crawlers_away(client):
     assert 'Disallow: /' in body
 
 
+def test_the_footer_names_the_reference_data(client):
+    references = client.app.state.references
+    body = client.get('/').text
+    assert 'Ensembl release %s,' % references.release in body
+    assert 'ClinVar %s.' % references.clinvar_version in body
+    assert 'unknown' not in (references.release, references.clinvar_version)
+
+
 def test_every_response_carries_the_security_headers(client):
     response = client.get('/healthz')
     assert response.headers['x-content-type-options'] == 'nosniff'
