@@ -1,8 +1,7 @@
 """Settings, read from the environment.
 
 Everything here is explicit and local. There are no secrets, and no default that
-points outside the repository -- the S3 settings the design doc lists (BUCKET,
-ENSEMBL_RELEASE, CLINVAR_VERSION) arrive with S3Storage at M2.
+points outside the repository.
 
 Numeric settings are clamped rather than trusted. A MAX_JOBS of 10000 in a stray
 environment variable would otherwise fork until the machine died.
