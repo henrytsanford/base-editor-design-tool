@@ -146,7 +146,9 @@ def create_app(settings=None):
         return response
 
     def page(request, template, status_code=200, **context):
-        context.update(poll_seconds=POLL_SECONDS)
+        references = app.state.references
+        context.update(poll_seconds=POLL_SECONDS, ensembl_release=references.release,
+                       clinvar_version=references.clinvar_version)
         return TEMPLATES.TemplateResponse(request=request, name=template,
                                           context=context, status_code=status_code)
 
