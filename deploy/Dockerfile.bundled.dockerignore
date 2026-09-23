@@ -1,0 +1,4 @@
+# The context here is refdata/ itself, so this excludes the one part of the bundle
+# the service never opens: the GTF and FASTA that tools/build_reference.py consumed,
+# about 1 GB.
+_download/

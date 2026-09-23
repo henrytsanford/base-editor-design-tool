@@ -1,4 +1,4 @@
-"""The cache key: design doc 3.1.
+"""The cache key.
 
 sha256 of canonical JSON over the resolved parameters, so a preset and the explicit
 parameters it resolves to share one result, and a new reference release or a bumped
@@ -20,7 +20,7 @@ MANIFEST = 'manifest.json'
 
 
 def key_fields(transcript_id, params, ensembl_release, clinvar_version, engine_version):
-    """The exact set design doc 3.1 lists. Ordering is handled by sort_keys.
+    """Ordering is handled by sort_keys.
 
     The design parameters come from the dataclass rather than a second list of
     names, so a parameter added to `DesignParams` changes the key instead of being

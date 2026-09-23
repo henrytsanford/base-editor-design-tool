@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+#
+# The deployed image: the application image plus the reference bundle. The build
+# context is refdata/, not the repository; deploy/README.md has the commands.
+
+ARG BASE=bedesign:thin
+FROM ${BASE}
+
+# The release and date are required and name exactly what gets copied, so a
+# superseded bundle or ClinVar db left in refdata/ never rides along.
+ARG ENSEMBL_RELEASE
+ARG CLINVAR_DATE
+
+# One layer per dataset, so the monthly ClinVar refresh re-pushes ~770 MB rather
+# than the whole 2.5 GB. --link keeps each layer's cache key independent of the base
+# image, so an engine change re-copies neither. The files stay root-owned: the
+# service opens every one of them read-only.
+COPY --link ensembl-${ENSEMBL_RELEASE}/ /opt/bedesign/refdata/ensembl-${ENSEMBL_RELEASE}/
+COPY --link clinvar-${CLINVAR_DATE}.db /opt/bedesign/refdata/

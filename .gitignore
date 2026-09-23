@@ -21,10 +21,8 @@ variant_summary.txt
 # Local Ensembl reference bundle (built by tools/build_reference.py)
 refdata/
 docs/web-service-design.md
+docs/deployment-plan.md
 CLAUDE.md
 
-# Finished designs written by the web service (design doc 3.1: S3 at M2)
+# Finished designs written by the web service (RESULTS_DIR)
 results/
-
-# CDK synth output (M2)
-cdk.out/
