@@ -57,12 +57,28 @@ details.advanced { margin: 4px 0 14px; }
 details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
 form.inline { margin: 0 0 14px; }
-form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 14px;
-               border: 1px solid var(--line); border-radius: 6px; padding: 12px;
-               margin-bottom: 12px; }
+/* The filter bar: one row above the table, wrapping on a narrow screen. */
+form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px;
+               padding: 12px 0; border-top: 1px solid var(--line); }
 form.filters .field { margin-bottom: 0; }
-/* Apply and Clear wrap as one, so Clear never lands on a line of its own. */
-form.filters .actions { display: flex; gap: 8px; }
+/* The checkboxes sit on the selects' baseline rather than under a label. */
+form.filters .field.checkbox { padding-bottom: 6px; }
+/* The count and the filters in force: the answer to the last click. */
+.result-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+                 margin-bottom: 10px; font-size: 14px; }
+.result-status p { margin: 0; }
+.result-status .muted { color: var(--muted); }
+.result-status .selection { flex-basis: 100%; }
+/* A chip is a link that removes its filter, so no script is needed. Ink, not the
+   accent: the accent means an action, and a chip is a thing in force. */
+ul.chips { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
+           gap: 6px; }
+ul.chips a { display: inline-block; padding: 2px 10px; border-radius: 999px;
+             font-size: 13px; color: var(--fg); background: #f0f0f0;
+             text-decoration: none; }
+ul.chips a:hover, ul.chips a:focus { background: #e2e2e2; }
+ul.chips a span { color: var(--muted); margin-left: 2px; }
+ul.chips .clear a { background: none; color: var(--muted); text-decoration: underline; }
 
 /* Gene list */
 .badge { font-size: 11px; font-weight: 600; color: #fff; background: var(--accent);
@@ -103,23 +119,30 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Coverage panels: the gene map full width, then the substitution matrix beside the
-   filters. Both are server-rendered SVG styled only by class, so style-src stays
-   'self'. */
+/* Coverage panels: the gene map full width, then the substitution matrix at the
+   size its squares need. Both are server-rendered SVG styled only by class, so
+   style-src stays 'self'. */
 .panel { min-width: 0; margin: 0;
          border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
 .panel.map { margin: 16px 0 18px; }
-.workbench { display: grid; grid-template-columns: minmax(0, 480px) minmax(0, 1fr);
-             gap: 18px; align-items: start; margin-bottom: 12px; }
-/* Beside the matrix the filters sit in a grid whose controls fill their cells, so
-   the form uses the column's width rather than a ragged left edge. */
-.workbench form.filters { display: grid; gap: 12px 14px; align-items: end;
-                          grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.workbench form.filters select { width: 100%; max-width: none; }
-.workbench form.filters .checkbox, .workbench form.filters .actions { grid-column: 1 / -1; }
-@media (max-width: 900px) {
-  .workbench { grid-template-columns: minmax(0, 1fr); }
-}
+/* The matrix folds to one line under the map. Open, its caption and key sit to the
+   right of the grid rather than above it, so the panel spends the page's width
+   instead of leaving it empty; a narrow screen stacks them again. */
+.panel.matrix { margin-bottom: 18px; padding: 10px 14px; }
+.panel.matrix summary { cursor: pointer; display: flex; align-items: baseline;
+                        gap: 10px; }
+/* A flex summary loses the browser's own triangle, so it draws one. */
+.panel.matrix summary::-webkit-details-marker { display: none; }
+.panel.matrix summary::before { content: "\25B8"; color: var(--muted); width: 12px;
+                                font-size: 16px; line-height: 1; }
+.panel.matrix[open] summary::before { content: "\25BE"; }
+.panel.matrix summary h2 { font-size: 15px; margin: 0; }
+.panel.matrix summary .muted { color: var(--muted); }
+.panel.matrix figure { display: flex; flex-wrap: wrap; align-items: flex-start;
+                       gap: 12px 28px; margin: 10px 0 2px; }
+.panel.matrix figure .viz { order: 1; flex: 0 1 460px; min-width: 0; }
+.panel.matrix figcaption { order: 2; flex: 1 1 220px; max-width: 320px; padding-top: 4px; }
+.panel.matrix figcaption .key { flex-direction: column; gap: 6px; }
 .panel figcaption h2 { font-size: 15px; margin: 0 0 4px; }
 .panel figcaption p { margin: 0 0 10px; }
 .viz { width: 100%; height: auto; display: block; }

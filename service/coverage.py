@@ -129,11 +129,6 @@ def substitution_key(source, target):
     return '%s-%s' % (source, target)
 
 
-def residue_name(residue):
-    """'Glu (E)' for a residue, 'Stop' for the stop codon, which has no letter."""
-    return 'Stop' if residue == 'Ter' else '%s (%s)' % (residue, ONE_LETTER[residue])
-
-
 def parse_substitution(value):
     """`value` as its canonical key, e.g. 'glu-gly' as 'Glu-Gly', or None if it
     names no square."""
@@ -525,39 +520,13 @@ class Coverage(object):
             'low': low, 'high': high, 'shaded': bool(shaded),
         }
 
-    def exon_options(self, selected=0):
-        """The filter form's exon choices: (number, guides) for each exon with guides.
-
-        An exon without guides is left out, since choosing it could only empty the
-        table, unless it is the one selected: a link may name it, and the form must
-        still show what the table is filtered by.
-        """
-        return [(index + 1, int(count)) for index, count in enumerate(self.exon_guides)
-                if count or selected == index + 1]
-
-    def substitution_options(self):
-        """The filter form's residue-change choices, grouped by initial residue.
-
-        [(group label, [(key, label), ...]), ...] in the matrix's own order,
-        listing only the squares that have guides, which are the ones it links.
-        """
-        groups = []
-        for source in RESIDUES:
-            options = []
-            for target in RESIDUES:
-                key = substitution_key(source, target)
-                count = self.matrix_counts.get(key, 0)
-                if count:
-                    options.append((key, '→ %s · %d' % (residue_name(target), count)))
-            if options:
-                groups.append((residue_name(source), options))
-        return groups
-
     def selection(self, key):
         """A one-line summary of the chosen square, for the status line."""
         source, target = key.split('-')
         return {
             'letters': '%s → %s' % (ONE_LETTER[source], ONE_LETTER[target]),
+            # The filter's chip, in the three-letter names the table's edits use.
+            'label': '%s → %s' % (source, 'Stop' if target == 'Ter' else target),
             'sites': self.matrix_sites[key],
             'pathogenic': self.matrix_pathogenic.get(key, 0),
             'silent': source == target,

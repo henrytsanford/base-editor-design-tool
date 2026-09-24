@@ -1,8 +1,12 @@
-{# The substitution matrix, beside the filters it drives. Plain SVG with no script,
-   the same as the gene map: each square is a link. #}
-<figure class="panel matrix">
+{# The substitution matrix, folded under the gene map. Plain SVG with no script, the
+   same as the map: each square is a link. The same editor fills the same squares in
+   every transcript, so it is closed until wanted, and open whenever a square is
+   selected, since that selection is what the map is then showing. #}
+<details class="panel matrix"{{ ' open' if view.sub else '' }}>
+<summary><h2>Residue changes</h2>
+<span class="muted">{{ matrix.cells|selectattr('count')|list|length }} possible with this editor</span></summary>
+<figure>
   <figcaption>
-    <h2>Possible residue changes</h2>
     <p class="muted">Click a square to filter the table and mark those guides on the map.</p>
     {# Hue is the map's: what the change does. Opacity is how many guides make it,
        drawn as a row of steps in ink so it cannot be mistaken for a fourth class. #}
@@ -44,3 +48,4 @@
     <text class="ax" x="{{ matrix.left + matrix.size / 2 }}" y="{{ matrix.height - 6 }}">Resulting residue</text>
   </svg>
 </figure>
+</details>

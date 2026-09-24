@@ -17,13 +17,9 @@ GC filter {{ params.filter_gc }}
 
 {% if map %}{% include "_gene_map.html" %}{% endif %}
 
-{# The matrix and the filters side by side: clicking a square is a filter, and the
-   sentence describing the selection lands next to the square that made it. #}
-<div{% if map %} class="workbench"{% endif %}>
-  {% if map %}{% include "_matrix.html" %}{% endif %}
-  <div class="controls">{% include "_filters.html" %}</div>
-</div>
+{% if map %}{% include "_matrix.html" %}{% endif %}
 
+{% include "_filters.html" %}
 {% include "_table.html" %}
 
 {% if result.pages > 1 %}

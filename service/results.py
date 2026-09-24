@@ -162,6 +162,9 @@ class ResultTable(object):
             'mutation': counted(MUTATION_COLUMN),
             'significance': counted(SIGNIFICANCE_COLUMN, skip=(NO_MATCH,)),
             'any_match': int(self._any_match.sum()),
+            # Which edits the result holds. Most editors make one, and a dropdown
+            # with a single choice is not a choice.
+            'edits': sorted(self._masks.get('Edit', {})),
         }
 
     def token_masks(self, column):

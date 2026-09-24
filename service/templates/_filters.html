@@ -1,6 +1,8 @@
-{# The filter form and the line saying what it matched. Its own file so it renders
-   the same beside the matrix or, when there are no charts, on its own. #}
-{# A GET form: applying a filter produces a URL that can be sent to someone. #}
+{# The filter bar and the line saying what it matched, directly above the table so
+   the answer to a click lands where the eye goes next. #}
+{# A GET form: applying a filter produces a URL that can be sent to someone. The
+   exon and residue change are picked on the charts, not here; they ride along as
+   hidden fields and show as chips below. #}
 <form method="get" action="/designs" class="filters">
   {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">
   {% endfor %}
@@ -24,15 +26,6 @@
     </select>
   </div>
   <div class="field">
-    <label for="deaminase">Edit</label>
-    <select id="deaminase" name="deaminase">
-      <option value="">Any</option>
-      {% for value in edits %}
-      <option value="{{ value }}"{{ ' selected' if view.deaminase == value else '' }}>{{ value }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="field">
     <label for="strand">Strand</label>
     <select id="strand" name="strand">
       <option value="">Any</option>
@@ -41,49 +34,45 @@
       {% endfor %}
     </select>
   </div>
-  {# The two chart selections. Clicking the map or the matrix sets these, so what
-     the charts show selected is always read, and undone, here. #}
-  {% if exon_options or sub_options %}
+  {# Most editors make one edit, and a dropdown with one choice is not a choice. A
+     link can still name it, so it is kept as a hidden field then. #}
+  {% if facets.edits|length > 1 %}
   <div class="field">
-    <label for="exon">Exon</label>
-    <select id="exon" name="exon">
+    <label for="deaminase">Edit</label>
+    <select id="deaminase" name="deaminase">
       <option value="">Any</option>
-      {% for number, count in exon_options %}
-      <option value="{{ number }}"{{ ' selected' if view.exon == number else '' }}>Exon {{ number }} ({{ count }})</option>
+      {% for value in facets.edits %}
+      <option value="{{ value }}"{{ ' selected' if view.deaminase == value else '' }}>{{ value }}</option>
       {% endfor %}
     </select>
   </div>
-  <div class="field">
-    <label for="sub">Residue change</label>
-    <select id="sub" name="sub">
-      <option value="">Any</option>
-      {% for group, options in sub_options %}
-      <optgroup label="{{ group }}">
-        {% for key, label in options %}
-        <option value="{{ key }}"{{ ' selected' if view.sub == key else '' }}>{{ label }}</option>
-        {% endfor %}
-      </optgroup>
-      {% endfor %}
-    </select>
-  </div>
+  {% elif view.deaminase %}<input type="hidden" name="deaminase" value="{{ view.deaminase }}">
   {% endif %}
   <div class="field checkbox">
     <label><input type="checkbox" name="hide_bsmbi" value="true"{{ ' checked' if view.hide_bsmbi else '' }}> Hide BsmBI</label>
     <label><input type="checkbox" name="hide_4t" value="true"{{ ' checked' if view.hide_4t else '' }}> Hide 4T</label>
   </div>
-  <div class="actions">
-    <button type="submit">Apply</button>
-    {% if view.filtered %}<a class="button secondary" href="{{ clear_url }}">Clear</a>{% endif %}
-  </div>
+  <button type="submit">Apply</button>
 </form>
 
-<p class="status">
-{% if view.filtered %}{{ result.matched }} of {{ total }} guides match.
-{% else %}{{ total }} guide{{ '' if total == 1 else 's' }}.{% endif %}
-{% if selection %}The {{ selection.letters }} change is made at {{ selection.sites }}
-site{{ '' if selection.sites == 1 else 's' }}{% if selection.pathogenic %}, and
-{{ selection.pathogenic }} guide{{ ' recreates' if selection.pathogenic == 1 else 's recreate' }}
-a pathogenic variant{% endif %}{% if selection.silent %}; it is silent, so the protein
-does not change{% endif %}.{% endif %}
-{% if result.pages > 1 %}Page {{ result.page }} of {{ result.pages }}.{% endif %}
-</p>
+<div class="result-status">
+  <p>
+  {% if view.filtered %}<strong>{{ '{:,}'.format(result.matched) }} of {{ '{:,}'.format(total) }} guides match</strong>
+  {% else %}<strong>{{ '{:,}'.format(total) }} guide{{ '' if total == 1 else 's' }}</strong>
+  {% endif %}
+  {% if result.pages > 1 %}<span class="muted">&middot; page {{ result.page }} of {{ result.pages }}</span>{% endif %}
+  </p>
+  {% if chips %}
+  <ul class="chips" aria-label="Filters in force">
+    {% for chip in chips %}
+    <li><a href="{{ chip.url }}" title="Remove this filter">{{ chip.label }} <span aria-hidden="true">&times;</span></a></li>
+    {% endfor %}
+    {% if chips|length > 1 %}<li class="clear"><a href="{{ clear_url }}">Clear all</a></li>{% endif %}
+  </ul>
+  {% endif %}
+  {% if selection %}<p class="selection">The {{ selection.letters }} change is made at {{ selection.sites }}
+  site{{ '' if selection.sites == 1 else 's' }}{% if selection.pathogenic %}, and
+  {{ selection.pathogenic }} guide{{ ' recreates' if selection.pathogenic == 1 else 's recreate' }}
+  a pathogenic variant{% endif %}{% if selection.silent %}; it is silent, so the protein
+  does not change{% endif %}.</p>{% endif %}
+</div>

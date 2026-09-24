@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
-from bedesign.engine import ALL_EDITS, BE_TYPES, DEFAULT_BE_TYPE, DesignParams
+from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
 from . import coverage
 from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
@@ -337,8 +337,12 @@ def create_app(settings=None):
             overrides.setdefault('page', None)
             return build_url('/designs', values, DESIGNS_ORDER, **overrides)
 
+        # The page shows TABLE_COLUMNS, in that order; the download keeps them all.
+        shown = [table.columns.index(column) for column in TABLE_COLUMNS
+                 if column in table.columns]
+        rows = [[row[index] for index in shown] for row in result.rows]
         columns = []
-        for column in table.columns:
+        for column in (table.columns[index] for index in shown):
             current = view.dir if view.sort == column else ''
             columns.append({
                 'name': column,
@@ -360,10 +364,7 @@ def create_app(settings=None):
         # than adding to it, so two clicks on the chart cannot build a filter that
         # matches nothing.
         map_view = matrix_view = selection = None
-        exon_options = sub_options = ()
         if table.coverage is not None:
-            exon_options = table.coverage.exon_options(view.exon)
-            sub_options = table.coverage.substitution_options()
             map_view = table.coverage.map_view(view.exon, view.sub)
             matrix_view = table.coverage.matrix_view(view.sub)
             for exon in map_view['exons']:
@@ -376,19 +377,45 @@ def create_app(settings=None):
             if view.sub:
                 selection = table.coverage.selection(view.sub)
 
+        # Every filter in force, each with the link that drops it alone. The two
+        # chart selections have no field in the form, so this is where they are
+        # read and undone.
+        chips = []
+
+        def chip(name, label):
+            chips.append({'label': label, 'url': designs_url(**{name: None})})
+
+        if view.exon:
+            chip('exon', 'Exon %d' % view.exon)
+        if selection:
+            chip('sub', selection['label'])
+        if view.mutation:
+            chip('mutation', view.mutation)
+        if view.significance:
+            chip('significance', 'ClinVar: %s' % (
+                'any known variant' if view.significance == ANY_MATCH
+                else view.significance))
+        if view.deaminase:
+            chip('deaminase', 'Edit %s' % view.deaminase)
+        if view.strand:
+            chip('strand', '%s strand' % view.strand.capitalize())
+        if view.hide_bsmbi:
+            chip('hide_bsmbi', 'No BsmBI site')
+        if view.hide_4t:
+            chip('hide_4t', 'No 4T')
+
         return page(
             request, 'table.html', transcript_id=transcript_id, heading=heading,
             params=params,
-            view=view, columns=columns, result=result,
-            map=map_view, matrix=matrix_view, selection=selection,
-            exon_options=exon_options, sub_options=sub_options,
+            view=view, columns=columns, rows=rows, result=result,
+            map=map_view, matrix=matrix_view, selection=selection, chips=chips,
             total=manifest.get('designs', table.total), facets=table.facets(),
-            any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
+            any_match=ANY_MATCH, strands=STRANDS, pager=pager,
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
-            # The chart's selection is not among these: it has its own two fields in
-            # the form, so applying a filter narrows what was clicked.
+            # The chart selections ride along, so applying a filter narrows what
+            # was clicked rather than discarding it.
             hidden=[(name, values[name])
-                    for name in DESIGN_PARAMS + ('sort', 'dir')
+                    for name in DESIGN_PARAMS + ('exon', 'sub', 'sort', 'dir')
                     if values.get(name)],
             downloads=_downloads(values))
 
@@ -413,6 +440,20 @@ DOWNLOAD_DESCRIPTIONS = {
                "variant's clinical significance.",
     'errors': "Guides or regions that couldn't be designed, and why. Often empty.",
 }
+
+
+# The table's columns on the page, in the order a reader looks for them: the guide,
+# where it cuts, what it does to the protein and whether that is a known variant,
+# then the detail. Left out are the columns that hold one value for the whole result
+# (gene, gene ID, transcript, gene strand, assembly, chromosome), which the heading
+# already names, and the four allele columns, which only restate `Edit` on one strand
+# or the other. The download has all of them.
+TABLE_COLUMNS = (
+    'sgRNA sequence', 'sgrna genomic position', 'sgRNA Strand',
+    'Amino acid edits', 'Mutation category', 'Clinical significance',
+    'Nucleotide edits', '# edits', '#silent edits', 'Edit', 'PAM',
+    'BsmBI flag', '4T flag', 'sgRNA context sequence',
+)
 
 
 def _downloads(values):

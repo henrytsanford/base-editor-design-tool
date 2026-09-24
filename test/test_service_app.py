@@ -10,7 +10,8 @@ import time
 
 import pytest
 
-from service.app import create_app
+from bedesign import DESIGN_COLUMNS
+from service.app import TABLE_COLUMNS, create_app
 from service.config import Settings
 from service.jobs import PoolBusy
 
@@ -90,7 +91,7 @@ def test_a_design_runs_and_renders_its_guides(client):
     response = wait_for_table(client, url)
     assert response.status_code == 200
     assert 'sgRNA sequence' in response.text
-    assert re.search(r'\d+ guides?\.', response.text)
+    assert re.search(r'<strong>[\d,]+ guides?</strong>', response.text)
 
 
 def test_the_second_request_is_served_from_the_cache(client, cached_url, tmp_path):
@@ -414,6 +415,23 @@ def test_a_header_link_sorts_the_table(client, cached_url):
     assert plain and sorted_desc and plain != sorted_desc
 
 
+def test_the_table_leads_with_what_the_guide_does(client, cached_url):
+    """The columns that hold one value for the whole result are in the heading, not
+    repeated on every row; the download keeps them."""
+    text = client.get(cached_url).text
+    headers = [html.unescape(name) for name in
+               re.findall(r'<th[^>]*><a [^>]*>(.*?)</a></th>', text)]
+    assert headers == list(TABLE_COLUMNS)
+    assert 'Ensembl Gene ID' not in headers and 'Genome assembly' not in headers
+    row = re.search(r'<tbody>\s*<tr>(.*?)</tr>', text, re.S).group(1)
+    assert row.count('<td>') == len(TABLE_COLUMNS)
+
+
+def test_every_table_column_is_one_the_engine_writes():
+    """A renamed engine column would otherwise drop out of the page unnoticed."""
+    assert set(TABLE_COLUMNS) <= set(DESIGN_COLUMNS)
+
+
 def test_the_second_page_shows_different_guides(client, cached_url):
     assert 'Page 1 of' in client.get(cached_url).text
     assert (_first_cell(client.get(cached_url).text)
@@ -479,8 +497,8 @@ def test_clicking_an_exon_filters_the_table_to_it(client):
     assert filtered.status_code == 200
     matched, total = _matched(filtered.text)
     assert 0 < matched < total
-    # The selection is read in the filter form, next to the other filters.
-    assert re.search(r'<option value="2" selected>Exon 2 \(\d+\)</option>', filtered.text)
+    # The selection is read, and undone, as a chip above the table.
+    assert re.search(r'<a href="[^"]*" title="Remove this filter">Exon 2 ', filtered.text)
 
 
 def test_clicking_a_square_filters_and_marks_the_map(client):
@@ -520,8 +538,25 @@ def test_the_filter_form_keeps_the_chart_selection(client):
     response = client.get(DESIGNS_URL + '&exon=2')
     form = response.text[response.text.index('class="filters"'):
                          response.text.index('</form>')]
-    assert '<select id="exon" name="exon">' in form
-    assert '<option value="2" selected>' in form
+    assert '<input type="hidden" name="exon" value="2">' in form
+    assert 'name="sub"' not in form
+
+
+def test_a_chip_removes_only_its_own_filter(client):
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2&mutation=Missense')
+    chips = dict((label.strip(), html.unescape(url)) for url, label in re.findall(
+        r'<a href="([^"]*)" title="Remove this filter">([^<]*)<', response.text))
+    assert set(chips) == {'Exon 2', 'Missense'}
+    assert 'exon=' not in chips['Exon 2'] and 'mutation=Missense' in chips['Exon 2']
+    assert 'exon=2' in chips['Missense'] and 'mutation=' not in chips['Missense']
+    assert 'Clear all' in response.text
+
+
+def test_a_single_edit_editor_offers_no_edit_dropdown(client):
+    """ABE7.10 makes only A-G, and a dropdown with one choice is not a choice."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'name="deaminase"' not in response.text
 
 
 def test_selecting_on_a_chart_leaves_its_caption_alone(client):
@@ -540,10 +575,19 @@ def test_selecting_on_a_chart_leaves_its_caption_alone(client):
     assert re.search(r'change is made at \d+\s+site', selected.text)
 
 
-def test_the_form_lists_every_square_the_matrix_links(client):
+def test_a_selected_square_shows_as_a_chip_in_three_letter_names(client):
     response = wait_for_table(client, DESIGNS_URL)
-    linked = set(re.findall(r'href="/designs\?[^"]*sub=([A-Za-z]{3}-[A-Za-z]{3})',
-                            response.text))
-    select = response.text[response.text.index('<select id="sub"'):]
-    select = select[:select.index('</select>')]
-    assert set(re.findall(r'<option value="([A-Za-z]{3}-[A-Za-z]{3})"', select)) == linked
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    source, target = sub.split('-')
+    label = '%s → %s' % (source, 'Stop' if target == 'Ter' else target)
+    assert 'title="Remove this filter">%s ' % label in selected.text
+
+
+def test_the_matrix_is_folded_until_a_square_is_selected(client):
+    """Open whenever a square is selected, since that is what the map then shows."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert '<details class="panel matrix">' in response.text
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    assert '<details class="panel matrix" open>' in selected.text
