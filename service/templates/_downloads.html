@@ -1,0 +1,12 @@
+{# The result files, with what each one holds. Its own file so the table page
+   and the download-only page list them the same way. #}
+<section class="downloads">
+<h2>Download the full result</h2>
+<ul>
+{% for filename, url, description in downloads %}
+<li><a href="{{ url }}">{{ filename }}</a> <span class="muted">&mdash; {{ description }}</span></li>
+{% endfor %}
+</ul>
+<p class="muted">Each file is a gzipped table. Always the complete result, not the filtered
+view.</p>
+</section>
