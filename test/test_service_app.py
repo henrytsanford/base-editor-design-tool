@@ -4,6 +4,7 @@ Marked `bundle` so it skips where there is no reference data, like the golden te
 ClinVar comes from the small `clinvar_db` fixture rather than the 767 MB database, and
 ISY1 is the cheapest gene in the panel (0.6 s in the design doc's table).
 """
+import html
 import re
 import time
 
@@ -452,3 +453,67 @@ def _first_cell(html):
     """The first data cell of the rendered table, for comparing orderings."""
     match = re.search(r'<tbody>\s*<tr><td>(.*?)</td>', html, re.S)
     return match.group(1) if match else ''
+
+
+def _matched(html):
+    """The (N, M) of the 'N of M guides match' the table prints when filtered."""
+    match = re.search(r'([\d,]+) of ([\d,]+) guides match', html)
+    return tuple(int(group.replace(',', '')) for group in match.groups()) if match else None
+
+
+def test_the_table_page_carries_both_coverage_panels(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'class="viz gene"' in response.text
+    assert 'class="viz mtx"' in response.text
+    # Between the downloads and the filter form, which is where the page puts it.
+    assert (response.text.index('Download the full result')
+            < response.text.index('Guide coverage')
+            < response.text.index('class="filters"'))
+
+
+def test_clicking_an_exon_filters_the_table_to_it(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    link = re.search(r'href="(/designs\?[^"]*exon=2[^"]*)"', response.text)
+    assert link, 'the map offers no exon link'
+    filtered = client.get(html.unescape(link.group(1)))
+    assert filtered.status_code == 200
+    matched, total = _matched(filtered.text)
+    assert 0 < matched < total
+    assert 'Showing exon 2 only' in filtered.text
+
+
+def test_clicking_a_square_filters_and_marks_the_map(client):
+    """The number on the square is the number the table then shows."""
+    response = wait_for_table(client, DESIGNS_URL)
+    link = re.search(r'href="(/designs\?[^"]*sub=([A-Za-z]{3}-[A-Za-z]{3})[^"]*)"',
+                     response.text)
+    assert link, 'the matrix offers no substitution link'
+    url = html.unescape(link.group(1))
+    promised = int(re.search(
+        r'>[A-Za-z]+ to [A-Za-z]+ · (\d+) guide', response.text).group(1))
+    filtered = client.get(url)
+    assert filtered.status_code == 200
+    assert _matched(filtered.text)[0] == promised
+    # and those guides are marked on the map beside it
+    assert 'class="hl"' in filtered.text
+
+
+def test_a_substitution_this_editor_cannot_make_is_a_400(client):
+    """Tryptophan to tryptophan needs no edit at all, so no guide makes it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&sub=Trp-Trp')
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize('query', ['exon=0', 'exon=99999', 'sub=Xyz-Gly',
+                                   'sub=drop+table', 'exon=two'])
+def test_a_bad_coverage_filter_is_refused(client, query):
+    response = client.get('%s&%s' % (DESIGNS_URL, query))
+    assert response.status_code == 400
+
+
+def test_the_filter_form_keeps_the_chart_selection(client):
+    """Applying a filter narrows what was clicked instead of discarding it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2')
+    assert '<input type="hidden" name="exon" value="2">' in response.text

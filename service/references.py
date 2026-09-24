@@ -11,6 +11,7 @@ bundle is reported as missing. Read-only connections cost about 0.2 ms to open a
 the pool is bounded, so one per thread is the cheap fix rather than a lock that would
 serialise every lookup.
 """
+import json
 import os
 import re
 import sqlite3
@@ -56,6 +57,25 @@ class References(object):
             'SELECT 1 FROM transcript WHERE transcript_id = ? LIMIT 1',
             (transcript_id,)).fetchone()
         return row is not None
+
+    def geometry(self, transcript_id):
+        """A transcript's exons, coding spans and strand, for the coverage map.
+
+        The same three columns `LocalSource.lookup` reads, and nothing else: the two
+        sequence columns are why this database is over a gigabyte, so naming the
+        projection keeps a drawing from reading a megabyte it will not use.
+
+        None when the transcript is not in the bundle, which lets a caller draw
+        nothing rather than fail a page that has a perfectly good table on it.
+        """
+        row = self._db().execute(
+            'SELECT exons, cds, strand FROM transcript WHERE transcript_id = ?',
+            (transcript_id,)).fetchone()
+        if row is None:
+            return None
+        return {'exons': json.loads(row[0] or '[]'),
+                'cds': json.loads(row[1] or '[]'),
+                'strand': row[2]}
 
     def search_genes(self, prefix, limit=GENE_LIMIT):
         """Gene symbols starting with `prefix`, for the search page.

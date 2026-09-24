@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from bedesign import DESIGN_COLUMNS
 from bedesign.engine import ALL_EDITS, DesignParams, UnknownBaseEditor
 
+from . import coverage
 from .cachekey import RESULT_FILES
 
 # No value a request can carry is longer than this; anything longer is a probe.
@@ -49,7 +50,7 @@ DOWNLOAD_PARAMS = DESIGN_PARAMS + ('file',)
 
 # How to show a result. None of these reach the cache key.
 VIEW_PARAMS = ('mutation', 'significance', 'deaminase', 'strand', 'hide_bsmbi',
-               'hide_4t', 'sort', 'dir', 'page')
+               'hide_4t', 'exon', 'sub', 'sort', 'dir', 'page')
 # Deliberately 'deaminase' rather than 'edit': 'edit' is already a design parameter
 # over the same C-T/A-G vocabulary, and one name for both would make a view setting
 # change the cache key.
@@ -60,6 +61,10 @@ DIRECTIONS = ('asc', 'desc')
 STRANDS = ('sense', 'antisense')
 # Deep enough for TTN's 25,662 guides at 50 a page, and a bound on the arithmetic.
 MAX_PAGE = 100000
+# Exons are numbered from 1. TTN has 363, the most of any human transcript; the cap
+# is a bound on the arithmetic, and a number past the end of a real transcript is
+# refused against that transcript once its geometry is known.
+MAX_EXON = 1000
 # ClinVar classifications are free text from an external source: letters, digits and
 # the punctuation its compound labels use, e.g. 'Benign/Likely benign' and
 # 'Conflicting classifications of pathogenicity'. Shape only -- the value is checked
@@ -249,6 +254,8 @@ class TableView:
     strand: str = ''
     hide_bsmbi: bool = False
     hide_4t: bool = False
+    exon: int = 0
+    sub: str = ''
     sort: str = ''
     dir: str = 'asc'
     page: int = 1
@@ -256,7 +263,8 @@ class TableView:
     @property
     def filtered(self):
         return bool(self.mutation or self.significance or self.deaminase
-                    or self.strand or self.hide_bsmbi or self.hide_4t)
+                    or self.strand or self.hide_bsmbi or self.hide_4t
+                    or self.exon or self.sub)
 
 
 def _choice(query, name, allowed):
@@ -296,6 +304,20 @@ def parse_view_query(query):
     page = _one(query, 'page')
     page = _int(page, 'page', 1, MAX_PAGE) if page is not None else 1
 
+    exon = _one(query, 'exon')
+    exon = _int(exon, 'exon', 1, MAX_EXON) if exon is not None else 0
+
+    # Shape only, the same way an open-vocabulary filter is checked: both halves must
+    # name a residue, and whether this result contains that substitution is answered
+    # against its own matrix once the frame is loaded.
+    sub = _one(query, 'sub') or ''
+    if sub:
+        pair = coverage.parse_substitution(sub)
+        if not pair:
+            raise ValidationError(
+                'sub names a residue change, e.g. Glu-Gly.')
+        sub = coverage.substitution_key(*pair)
+
     return TableView(
         mutation=_open_value(query, 'mutation'),
         significance=_open_value(query, 'significance'),
@@ -303,6 +325,8 @@ def parse_view_query(query):
         strand=_choice(query, 'strand', STRANDS),
         hide_bsmbi=_bool(query, 'hide_bsmbi'),
         hide_4t=_bool(query, 'hide_4t'),
+        exon=exon,
+        sub=sub,
         sort=sort,
         dir=_choice(query, 'dir', DIRECTIONS) or 'asc',
         page=page,

@@ -127,6 +127,11 @@ class ResultTable(object):
             (column, _value_masks(self.frame[column].to_numpy()))
             for column in VALUE_COLUMNS if column in self.frame.columns)
         self._any_match = self._compute_any_match()
+        # The coverage panels, attached after construction by whoever has the
+        # transcript's geometry -- this class only ever sees the designs file. None
+        # when the bundle could not answer for the transcript, in which case the page
+        # renders its table without the drawings above it.
+        self.coverage = None
 
     def _compute_any_match(self):
         """Rows carrying at least one real ClinVar classification."""
@@ -191,6 +196,17 @@ class ResultTable(object):
             mask = keep(~self._value_mask('BsmBI flag', FLAG_YES))
         if view.hide_4t:
             mask = keep(~self._value_mask('4T flag', FLAG_YES))
+        # The two coverage filters. Both name something the drawing offered, so a
+        # value this result does not contain is a mistake worth reporting rather than
+        # an empty table: without the panels there is nothing to have clicked.
+        if view.exon:
+            if self.coverage is None or not self.coverage.has_exon(view.exon):
+                raise UnknownFilterValue('exon %d' % view.exon)
+            mask = keep(self.coverage.exon_mask(view.exon))
+        if view.sub:
+            if self.coverage is None or not self.coverage.has_substitution(view.sub):
+                raise UnknownFilterValue(view.sub.replace('-', ' to '))
+            mask = keep(self.coverage.substitution_mask(view.sub))
         return mask
 
     def _ordered(self, positions, view):

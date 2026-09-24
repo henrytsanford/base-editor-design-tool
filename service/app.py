@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
 from bedesign.engine import ALL_EDITS, BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
+from . import coverage
 from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
                        result_key)
 from .config import Settings
@@ -307,10 +308,21 @@ def create_app(settings=None):
 
     def _table(request, key, transcript_id, params, view, manifest):
         storage = app.state.storage
+        references = app.state.references
 
         def load():
-            return ResultTable(storage.get(result_key(key, 'designs')),
-                               DESIGN_COLUMNS)
+            # The coverage panels are built inside the cached load, so they are
+            # computed once per result and share the dedupe that keeps two
+            # simultaneous misses from parsing the same frame twice.
+            table = ResultTable(storage.get(result_key(key, 'designs')),
+                                DESIGN_COLUMNS)
+            shape = references.geometry(transcript_id)
+            if shape is not None and shape['exons']:
+                table.coverage = coverage.Coverage(
+                    table.frame,
+                    coverage.Geometry(shape['exons'], shape['cds'], shape['strand'],
+                                      params.intron_buffer))
+            return table
 
         table = app.state.tables.get(key, load)
         result = table.select(view)
@@ -340,13 +352,36 @@ def create_app(settings=None):
                     if result.page < result.pages else '',
         }
 
+        # The panels, and the links that come off them. Selecting an exon or a
+        # substitution returns to page 1 and replaces the previous selection rather
+        # than adding to it, so two clicks on the chart cannot build a filter that
+        # matches nothing.
+        map_view = matrix_view = selection = None
+        if table.coverage is not None:
+            map_view = table.coverage.map_view(view.exon, view.sub)
+            matrix_view = table.coverage.matrix_view(view.sub)
+            for exon in map_view['exons']:
+                exon['url'] = designs_url(
+                    exon=None if exon['selected'] else exon['number'], sub=None)
+            for cell in matrix_view['cells']:
+                if cell['count']:
+                    cell['url'] = designs_url(
+                        sub=None if cell['selected'] else cell['key'], exon=None)
+            if view.sub:
+                selection = table.coverage.selection(view.sub)
+
         return page(
             request, 'table.html', transcript_id=transcript_id, params=params,
             view=view, columns=columns, result=result,
+            map=map_view, matrix=matrix_view, selection=selection,
+            clear_coverage_url=designs_url(exon=None, sub=None),
             total=manifest.get('designs', table.total), facets=table.facets(),
             any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
-            hidden=[(name, values[name]) for name in DESIGN_PARAMS + ('sort', 'dir')
+            # The filter form carries the chart's selection through, so applying a
+            # filter narrows what was clicked instead of discarding it.
+            hidden=[(name, values[name])
+                    for name in DESIGN_PARAMS + ('sort', 'dir', 'exon', 'sub')
                     if values.get(name)],
             downloads=_downloads(values))
 

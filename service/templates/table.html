@@ -11,6 +11,8 @@ GC filter {{ params.filter_gc }}
 
 {% include "_downloads.html" %}
 
+{% if map %}{% include "_coverage.html" %}{% endif %}
+
 {# A GET form: applying a filter produces a URL that can be sent to someone. #}
 <form method="get" action="/designs" class="filters">
   {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">

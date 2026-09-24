@@ -1,7 +1,18 @@
-:root { --fg: #1a1a1a; --muted: #666; --line: #ddd; --bg: #fff; --accent: #0b5; }
+:root { --fg: #1a1a1a; --muted: #666; --line: #ddd; --bg: #fff; --accent: #0b5;
+        /* What a guide does, on the coverage map. Categorical: each consequence is
+           its own hue, with no severity implied by colour. Checked against this
+           page's white for colour-vision separation -- worst pair dE 9.2 -- so
+           changing one means checking the set again. The two non-coding classes are
+           grey, which is what keeps colour meaning "this changes the protein". */
+        --lof: #eb6834; --mis: #2a78d6; --sil: #1baf7a;
+        --nc: #b9b9b9; --none: #e4e4e4;
+        /* Count on the substitution matrix is a continuous ramp, set per square
+           from coverage.RAMP rather than here. */
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --sil-cell: #ececec; --exon-block: #555; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
-       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+       font: 15px/1.5 var(--sans); }
 header { border-bottom: 1px solid var(--line); padding: 12px 20px; }
 header a { color: var(--fg); text-decoration: none; font-weight: 600; }
 main { padding: 20px; }
@@ -61,3 +72,66 @@ th.desc a::after { content: " \2193"; }
 .downloads li a { font-weight: 600; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Coverage panels: the gene map and the substitution matrix, above the table.
+   Both are server-rendered SVG styled only by class, so style-src stays 'self'. */
+.coverage { margin: 16px 0; }
+.panels { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.panel { flex: 1 1 380px; min-width: 0; margin: 0;
+         border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+.panel.matrix { flex: 0 1 560px; }
+.panel.matrix .viz { max-width: 470px; margin: 0 auto; }
+.panel figcaption h2 { font-size: 15px; margin: 0 0 4px; }
+.panel figcaption p { margin: 0 0 10px; }
+.viz { width: 100%; height: auto; display: block; }
+.viz text { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+.viz .end { text-anchor: end; }
+.viz .spine { stroke: #bbb; stroke-width: 1; }
+.viz .exon rect { fill: var(--exon-block); }
+.viz a:hover .exon rect, .viz a:focus .exon rect { fill: var(--accent); }
+.viz .exon.on rect { fill: var(--accent); }
+.viz .exl { text-anchor: middle; font-size: 9px; font-weight: 600; fill: #fff;
+            pointer-events: none; }
+.viz .c-lof { fill: var(--lof); } .viz .c-mis { fill: var(--mis); }
+.viz .c-sil { fill: var(--sil); } .viz .c-nc { fill: var(--nc); }
+.viz .c-none { fill: var(--none); }
+.viz .hit { fill: transparent; }
+.viz .bin:hover .hit { fill: rgba(0, 0, 0, .06); }
+.viz .hl .band { fill: var(--accent); fill-opacity: .16; }
+.viz .hl .tick { fill: var(--accent); }
+
+/* The matrix. Empty squares are the answer to "can this editor do it at all", so
+   they are drawn rather than left out. */
+.viz.mtx .cell rect { stroke: #e8e8e8; stroke-width: .5; }
+/* A counted square's fill is a presentation attribute, which this rule would
+   override, so it only reaches squares without one. */
+.viz.mtx .cell.off rect { fill: var(--bg); }
+.viz.mtx .cell.sil rect { fill: var(--sil-cell); }
+.viz.mtx a:hover .cell rect, .viz.mtx a:focus .cell rect { stroke: var(--fg); stroke-width: 1.5; }
+.viz.mtx .cell.on rect { stroke: var(--accent); stroke-width: 2.5; }
+.viz.mtx .sep { stroke: #999; stroke-width: 1; }
+.viz.mtx .frame { fill: none; stroke: #999; stroke-width: 1; }
+.viz.mtx .rl { text-anchor: end; fill: var(--fg); font-size: 10px; }
+.viz.mtx .cl { text-anchor: middle; fill: var(--fg); font-size: 10px; }
+.viz.mtx .cl.rot { text-anchor: end; font-size: 9px; }
+.viz.mtx .gl { text-anchor: end; font-size: 10px; }
+.viz.mtx .gl.mid { text-anchor: middle; }
+.viz.mtx .ax { text-anchor: middle; fill: var(--fg); font-size: 12px; }
+
+.key { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap;
+       gap: 3px 14px; font-size: 12px; color: var(--muted); }
+.key li { display: flex; align-items: center; gap: 6px; }
+.key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.key i.c-lof { background: var(--lof); } .key i.c-mis { background: var(--mis); }
+.key i.c-sil { background: var(--sil); } .key i.c-nc { background: var(--nc); }
+.key i.c-none { background: var(--none); box-shadow: inset 0 0 0 1px #ccc; }
+.key i.hl { background: var(--accent); }
+.key.ramp i { border-radius: 0; width: 18px; }
+.key.ramp .bar { width: 120px; height: 11px; display: inline-block; }
+.key.ramp i.sil { background: var(--sil-cell); }
+.key.ramp i.off { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+
+.picked { font-size: 14px; background: #f3fbf6; border: 1px solid #cfe9db;
+          border-radius: 4px; padding: 8px 12px; margin: 12px 0 0; }
+.tally { font-size: 12px; color: var(--muted); margin: 8px 0 0;
+         border-top: 1px solid var(--line); padding-top: 8px; }
