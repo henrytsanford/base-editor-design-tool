@@ -312,11 +312,10 @@ def parse_view_query(query):
     # against its own matrix once the frame is loaded.
     sub = _one(query, 'sub') or ''
     if sub:
-        pair = coverage.parse_substitution(sub)
-        if not pair:
+        sub = coverage.parse_substitution(sub)
+        if not sub:
             raise ValidationError(
                 'sub names a residue change, e.g. Glu-Gly.')
-        sub = coverage.substitution_key(*pair)
 
     return TableView(
         mutation=_open_value(query, 'mutation'),

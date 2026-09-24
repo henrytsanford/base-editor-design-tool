@@ -176,6 +176,8 @@ def test_sort_must_name_a_column_of_the_table():
     'page=nine',
     'mutation=<script>',
     'hide_4t=perhaps',
+    'exon=0',
+    'sub=drop table',
 ])
 def test_a_bad_view_value_is_refused(query):
     with pytest.raises(ValidationError):
@@ -193,6 +195,12 @@ def test_an_open_vocabulary_filter_is_checked_for_shape_only():
     assert view('significance=Benign/Likely benign').significance == \
         'Benign/Likely benign'
     assert view('significance=Conflicting classifications of pathogenicity')
+
+
+def test_exon_and_substitution_survive_the_query_string():
+    parsed = view('exon=3&sub=glu-gly')
+    assert (parsed.exon, parsed.sub) == (3, 'Glu-Gly')
+    assert parsed.filtered
 
 
 def test_a_blank_field_means_the_user_left_it_alone():

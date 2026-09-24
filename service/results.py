@@ -30,6 +30,9 @@ ROWS_PER_PAGE = 50
 
 MUTATION_COLUMN = 'Mutation category'
 SIGNIFICANCE_COLUMN = 'Clinical significance'
+POSITION_COLUMN = 'sgrna genomic position'
+STRAND_COLUMN = 'sgRNA Strand'
+AA_COLUMN = 'Amino acid edits'
 # The two ';'-joined columns, the only ones filtered by token.
 TOKEN_COLUMNS = (MUTATION_COLUMN, SIGNIFICANCE_COLUMN)
 
@@ -44,10 +47,10 @@ ANY_MATCH = 'any-match'
 # Filtered by an exact value rather than by a token. Two distinct values each, so
 # masking them once per parse costs almost nothing and takes the elementwise string
 # comparison off every filtered request.
-VALUE_COLUMNS = ('Edit', 'sgRNA Strand', 'BsmBI flag', '4T flag')
+VALUE_COLUMNS = ('Edit', STRAND_COLUMN, 'BsmBI flag', '4T flag')
 
 # Sorted as numbers. Every cell is a string, so without this '10' sorts before '9'.
-NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', 'sgrna genomic position'])
+NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', POSITION_COLUMN])
 
 # The flag columns hold 'yes' or the empty string -- never 'no'.
 FLAG_YES = 'yes'
@@ -85,7 +88,7 @@ def split_tokens(cell):
     return [token for token in cell.split(';') if token] if cell else []
 
 
-def token_masks(values):
+def _token_masks(values):
     """Boolean masks, one per token appearing in a ';'-joined column.
 
     Built from the split cells rather than a substring test: 'Benign',
@@ -123,7 +126,7 @@ class ResultTable(object):
         self.columns = list(self.frame.columns)
         self.total = len(self.frame)
         self._masks = {
-            column: token_masks(self.frame[column].to_numpy())
+            column: _token_masks(self.frame[column].to_numpy())
             for column in TOKEN_COLUMNS if column in self.frame.columns}
         self._masks.update(
             (column, _value_masks(self.frame[column].to_numpy()))
@@ -197,7 +200,7 @@ class ResultTable(object):
         if view.deaminase:
             mask = keep(self._value_mask('Edit', view.deaminase))
         if view.strand:
-            mask = keep(self._value_mask('sgRNA Strand', view.strand))
+            mask = keep(self._value_mask(STRAND_COLUMN, view.strand))
         if view.hide_bsmbi:
             mask = keep(~self._value_mask('BsmBI flag', FLAG_YES))
         if view.hide_4t:

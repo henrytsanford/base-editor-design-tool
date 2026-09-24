@@ -11,7 +11,7 @@
          the drawing under the pointer. The selection is said in the filter form.
          Only what the drawing cannot say for itself: the strands are labelled on the
          SVG, and the shortening is the one thing a reader would otherwise misread. #}
-      <p class="muted">Introns shortened to the {{ params.intron_buffer }} bp either side a
+      <p class="muted">Introns and UTRs shortened to the {{ params.intron_buffer }} bp either side a
       guide can reach. Click an exon to filter the table.</p>
       {# The legend carries each class's count, so the colours and the tally are one
          thing to read rather than the same five labels written out twice. Only the
@@ -40,7 +40,7 @@
       {% endfor %}
       {# A column rather than a block on the gene: the exon track underneath stays
          readable, and a marked column cannot be mistaken for a selected exon, which
-         is drawn in the same accent. #}
+         is drawn in the same ink. #}
       {% for mark in map.highlight %}
       <g class="hl"><rect class="band" x="{{ mark.x }}" y="18" width="{{ mark.width }}" height="{{ map.height - 40 }}"/><rect class="tick" x="{{ mark.x }}" y="18" width="{{ mark.width }}" height="5"/></g>
       {% endfor %}

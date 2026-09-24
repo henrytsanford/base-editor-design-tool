@@ -5,12 +5,11 @@ the arithmetic instead of at the engine. The end-to-end checks against a real
 transcript live in test_service_app.py.
 """
 import numpy as np
-import pandas as pd
 import pytest
 
 from service import coverage
 from service.jobs import _tsv_gz
-from service.params import TableView, ValidationError, parse_view_query
+from service.params import TableView
 from service.results import ResultTable, UnknownFilterValue
 
 # A two-exon gene on the plus strand, coding from 150.
@@ -24,8 +23,8 @@ COLUMNS = ['sgrna genomic position', 'sgRNA Strand', 'Mutation category',
 
 
 def frame(rows):
-    """A designs frame with only the columns the panels read."""
-    return pd.DataFrame(rows, columns=COLUMNS)
+    """A designs table with only the columns the panels read."""
+    return ResultTable(_tsv_gz(COLUMNS, rows), COLUMNS)
 
 
 def layout(geometry, *positions):
@@ -50,9 +49,41 @@ def test_exons_are_drawn_to_scale_and_introns_are_not():
     assert intron < 99
 
 
+# Coding 1000-1100, between a 5 kb 5' UTR and a 3 kb 3' UTR on the same exon, then a
+# second exon that is all UTR.
+LONG_UTR = coverage.Geometry([(-4000, 4100), (9000, 9500)], [(1000, 1100)], 1,
+                             buffer=30)
+
+
+def test_a_long_utr_keeps_only_the_buffer_beside_the_coding_sequence():
+    """The 5 kb UTR draws as the buffer either side of a stub, like an intron;
+    the coding sequence and the buffer next to it still run base for base."""
+    utr_start, cds_start, cds_end = layout(LONG_UTR, -4000, 1000, 1101)
+    assert cds_end - cds_start == pytest.approx(101)
+    assert cds_start - utr_start == pytest.approx(2 * 30 + coverage.STUB)
+    near, edge = layout(LONG_UTR, 970, 1000)
+    assert edge - near == pytest.approx(30)
+
+
+def test_a_utr_only_exon_is_squeezed_but_still_drawn():
+    start, end = layout(LONG_UTR, 9000, 9501)
+    assert end - start == pytest.approx(2 * 30 + coverage.STUB)
+    assert LONG_UTR.width < 700
+
+
+def test_an_exon_number_sits_on_its_coding_part():
+    """Exon 1 is UTR from 100 and coding from 150: the number centres on 150-200,
+    not on the whole exon, where it would half sit on the thin UTR block."""
+    exon = coverage.Coverage(frame([]), PLUS).map_view()['exons'][0]
+    scale = (coverage.WIDTH - 2 * coverage.MARGIN) / PLUS.width
+    start, end = layout(PLUS, 150, 201)
+    assert exon['label_x'] == pytest.approx(
+        coverage.MARGIN + (start + end) / 2 * scale, abs=0.01)
+
+
 def test_exon_parts_split_coding_from_untranslated():
-    assert PLUS.parts(0) == [(100, 149, False), (150, 200, True)]
-    assert PLUS.parts(1) == [(300, 350, True), (351, 400, False)]
+    assert PLUS.parts[0] == [(100, 149, False), (150, 200, True)]
+    assert PLUS.parts[1] == [(300, 350, True), (351, 400, False)]
 
 
 def test_a_minus_strand_gene_is_laid_out_from_its_own_start():
@@ -167,35 +198,16 @@ def test_the_form_offers_the_squares_the_matrix_links_in_its_order():
 
 
 def test_substitution_parsing_is_case_insensitive_and_bounded():
-    assert coverage.parse_substitution('Glu-Gly') == ('Glu', 'Gly')
+    assert coverage.parse_substitution('glu-GLY') == 'Glu-Gly'
     assert coverage.parse_substitution('Xyz-Gly') is None
     assert coverage.parse_substitution('Glu-Gly-Ala') is None
     assert coverage.parse_substitution('') is None
 
 
-def test_a_substitution_that_is_not_a_residue_pair_is_refused():
-    with pytest.raises(ValidationError):
-        parse_view_query(_query({'sub': 'drop table'}))
-    with pytest.raises(ValidationError):
-        parse_view_query(_query({'exon': '0'}))
-
-
-def test_exon_and_substitution_survive_the_query_string():
-    view = parse_view_query(_query({'exon': '3', 'sub': 'glu-gly'}))
-    assert view.exon == 3
-    assert view.sub == 'Glu-Gly'
-    assert view.filtered
-
-
-def _query(values):
-    from starlette.datastructures import QueryParams
-    return QueryParams(values)
-
-
 def _designs_table(rows, geometry=PLUS):
-    """A ResultTable over a frame, with its coverage attached the way the app does."""
-    table = ResultTable(_tsv_gz(COLUMNS, rows), COLUMNS)
-    table.coverage = coverage.Coverage(table.frame, geometry)
+    """A ResultTable with its coverage attached the way the app does."""
+    table = frame(rows)
+    table.coverage = coverage.Coverage(table, geometry)
     return table
 
 

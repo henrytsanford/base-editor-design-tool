@@ -39,8 +39,7 @@ from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PAR
                      parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
-from .results import (ANY_MATCH, MUTATION_COLUMN, ResultCache, ResultTable,
-                      UnknownFilterValue)
+from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -323,10 +322,9 @@ def create_app(settings=None):
             shape = references.geometry(transcript_id)
             if shape is not None and shape['exons']:
                 table.coverage = coverage.Coverage(
-                    table.frame,
+                    table,
                     coverage.Geometry(shape['exons'], shape['cds'], shape['strand'],
-                                      params.intron_buffer),
-                    table.token_masks(MUTATION_COLUMN))
+                                      params.intron_buffer))
             return table
 
         table = app.state.tables.get(key, load)

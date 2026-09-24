@@ -3,9 +3,9 @@
 Two pictures of one result, computed together because they read the same two columns
 and answer to the same two filters.
 
-The *map* lays the transcript out left to right with its introns shortened to the
-buffer the design actually tiled into, stacks the guides into a fixed number of bins,
-and colours each bin by the worst thing its guides do. Binning is what keeps the
+The *map* lays the transcript out left to right with its introns and UTRs shortened
+to the buffer the design actually tiled into, stacks the guides into a fixed number of
+bins, and colours each bin by the worst thing its guides do. Binning is what keeps the
 drawing the same size for TTN as for MAP2K1: the shape count follows the width of the
 figure, never the guide count.
 
@@ -27,11 +27,8 @@ import pandas as pd
 
 from bedesign.engine import get_aa_map
 
-from .results import MUTATION_COLUMN, SIGNIFICANCE_COLUMN, split_tokens, token_masks
-
-POSITION_COLUMN = 'sgrna genomic position'
-STRAND_COLUMN = 'sgRNA Strand'
-AA_COLUMN = 'Amino acid edits'
+from .results import (AA_COLUMN, MUTATION_COLUMN, POSITION_COLUMN, SIGNIFICANCE_COLUMN,
+                      STRAND_COLUMN, split_tokens)
 
 # How many bins the transcript is divided into. The map's shape count is bounded by
 # this and by the exon count, so a 35,991-residue gene draws about as much as a 393.
@@ -47,6 +44,9 @@ BAR_MAX = 78          # tallest a bin's stack may be drawn
 CDS_HEIGHT = 16       # a coding exon block
 UTR_HEIGHT = 8        # an untranslated one, drawn thinner the way a gene model is
 LABEL_GAP = 22        # how far apart exon numbers must be to both be drawn
+# What the unreachable middle of a long intron or UTR is squeezed into, in bases of
+# drawing: enough to read as a break without costing the exons any width.
+STUB = 24
 
 # What a guide does, worst first. A guide is drawn as the most severe edit it makes,
 # so a guide that knocks out a splice site and also makes a silent change reads as
@@ -124,23 +124,24 @@ def residue_name(residue):
 
 
 def parse_substitution(value):
-    """`value` as a (source, target) pair, or None if it names no square."""
+    """`value` as its canonical key, e.g. 'glu-gly' as 'Glu-Gly', or None if it
+    names no square."""
     match = SUBSTITUTION.match(value or '')
     if not match:
         return None
     source, target = match.group(1).title(), match.group(2).title()
     if source not in RESIDUE_INDEX or target not in RESIDUE_INDEX:
         return None
-    return source, target
+    return substitution_key(source, target)
 
 
 class Geometry(object):
-    """A transcript's exons laid out with its introns shortened.
+    """A transcript's exons laid out with its introns and UTRs shortened.
 
     Coordinates are *oriented*: genomic position times strand, so that a position
     increasing means moving 5' to 3' whichever strand the gene is on, and one set of
     arithmetic serves both. `buffer` is the design's own intron buffer, so the drawing
-    shows exactly the intron the run was allowed to tile into and no more.
+    shows exactly the non-coding sequence the run was allowed to tile into and no more.
     """
 
     def __init__(self, exons, cds, strand, buffer=30):
@@ -151,19 +152,49 @@ class Geometry(object):
         self.exons.sort()
         self.cds = sorted(tuple(sorted((a * self.strand, b * self.strand)))
                           for a, b in (cds or []))
-        # An intron is drawn as the buffer either side plus a fixed stub, so a long
-        # intron does not squeeze the exons into invisibility.
-        self.gap = 2 * buffer + 24
-        offsets = []
-        x = buffer
-        for low, high in self.exons:
-            offsets.append(x)
-            x += high - low + 1 + self.gap
-        self.width = max(x - self.gap + buffer, 1)
-        self.offsets = np.array(offsets, dtype=np.float64)
         self._lows = np.array([low for low, _ in self.exons], dtype=np.float64)
         self._highs = np.array([high for _, high in self.exons], dtype=np.float64)
-        self._parts = self._split_parts()
+        # Each exon's (low, high, is_coding) pieces, so UTR draws thinner.
+        self.parts = self._split_parts()
+        knots = self._knots(buffer)
+        self._genomic = np.array([g for g, _ in knots], dtype=np.float64)
+        self._drawn = np.array([x for _, x in knots], dtype=np.float64)
+        self.width = max(knots[-1][1], 1)
+
+    def _knots(self, buffer):
+        """The drawing as (oriented position, drawing position) breakpoints, with
+        straight lines between them.
+
+        Coding sequence runs base for base. Anything else -- an intron, a UTR, the
+        flank past either end -- keeps `buffer` bases at each edge, the most a guide
+        can reach, and has the rest squeezed into a fixed stub, so a 5 kb UTR or
+        intron draws no wider than a 100 bp one and cannot crowd out the exons.
+        Each base spans [p, p + 1), so an exon ends at high + 1.
+        """
+        knots = [(self.exons[0][0] - buffer, 0.0)]
+
+        def run(end):
+            start, x = knots[-1]
+            if end > start:
+                knots.append((end, x + end - start))
+
+        def squeeze(end):
+            start, x = knots[-1]
+            if end - start > 2 * buffer + STUB:
+                knots.append((start + buffer, x + buffer))
+                knots.append((end - buffer, x + buffer + STUB))
+            run(end)
+
+        for index, (low, _) in enumerate(self.exons):
+            (squeeze if index else run)(low)
+            for _, end, coding in self.parts[index]:
+                (run if coding else squeeze)(end + 1)
+        run(self.exons[-1][1] + 1 + buffer)
+        return knots
+
+    def x(self, positions):
+        """Oriented coordinates as positions along the drawing, clamped to it."""
+        return np.interp(positions, self._genomic, self._drawn)
 
     def place(self, positions):
         """Oriented coordinates as (positions along the drawing, nearest exon index).
@@ -175,33 +206,14 @@ class Geometry(object):
         index = np.clip(np.searchsorted(self._highs, positions, side='left'),
                         0, count - 1)
         previous = np.clip(index - 1, 0, count - 1)
-        low, high = self._lows[index], self._highs[index]
-        previous_low, previous_high = self._lows[previous], self._highs[previous]
-        half = self.gap / 2.0
-
-        # Inside an exon the drawing runs base for base; past the last one it keeps
-        # running, which is the same expression, so only the clamp is separate.
-        inside = positions >= low
-        within = self.offsets[index] + (positions - low)
-        after = positions - previous_high
-        before = low - positions
-        upstream = (self.offsets[previous] + (previous_high - previous_low)
-                    + np.minimum(after, half))
-        downstream = self.offsets[index] - np.minimum(before, half)
-        intron = np.where(after <= before, upstream, downstream)
-        # Before the first exon there is no previous one to measure from.
-        intron = np.where(index == 0,
-                          np.maximum(0.0, self.offsets[0] - before), intron)
-        layout = np.minimum(np.where(inside, within, intron), self.width)
+        before = self._lows[index] - positions
+        after = positions - self._highs[previous]
 
         # The nearer of the two exons it sits between; a tie goes to the earlier one.
-        distance = np.where(inside, 0.0, np.abs(before))
+        # Past the last exon `before` is negative, which counts as inside it.
+        distance = np.maximum(before, 0.0)
         exon = np.where(distance < np.abs(after), index, previous)
-        return layout, exon.astype(np.int32)
-
-    def parts(self, index):
-        """(low, high, is_coding) pieces of one exon, so UTR draws thinner."""
-        return self._parts[index]
+        return self.x(positions), exon.astype(np.int32)
 
     def _split_parts(self):
         """Every exon's pieces, in one merge pass: exons and CDS spans are both
@@ -228,14 +240,12 @@ class Geometry(object):
 class Coverage(object):
     """The two panels, and the masks that let the table answer to them."""
 
-    def __init__(self, frame, geometry, category_masks=None):
-        """`category_masks` are the table's own masks for MUTATION_COLUMN, so the
-        column is split once per result; built from `frame` when not given."""
+    def __init__(self, table, geometry):
+        """Built over a ResultTable, whose own MUTATION_COLUMN masks are reused so
+        the column is split once per result."""
         self.geometry = geometry
-        self.total = len(frame)
-        if category_masks is None:
-            category_masks = token_masks(frame[MUTATION_COLUMN].to_numpy())
-        self._scan(frame, category_masks)
+        self.total = table.total
+        self._scan(table.frame, table.token_masks(MUTATION_COLUMN))
         self.matrix_counts = {key: len(rows)
                               for key, rows in self._substitution_rows.items()}
         drawn = self._row_exons[self._row_exons >= 0]
@@ -329,23 +339,29 @@ class Coverage(object):
         exons = []
         last_label = -LABEL_GAP
         for index, (low, high) in enumerate(geometry.exons):
-            pieces = geometry.parts(index)
-            offset = geometry.offsets[index] - low
+            pieces = geometry.parts[index]
             blocks = []
             for start, end, coding in pieces:
-                x0 = MARGIN + (offset + start) * scale
-                x1 = MARGIN + (offset + end) * scale + scale
+                x0 = MARGIN + geometry.x(start) * scale
+                x1 = MARGIN + geometry.x(end + 1) * scale
                 height = CDS_HEIGHT if coding else UTR_HEIGHT
                 blocks.append({'x': round(x0, 2),
                                'width': round(max(0.8, x1 - x0), 2),
                                'y': round(MIDLINE - height / 2.0, 2),
                                'height': height})
-            centre = MARGIN + (geometry.offsets[index] + (high - low) / 2.0) * scale
+            # The number sits on the coding part when there is one: white on the
+            # thin UTR block it would be cut off or unreadable.
+            coding_pieces = [piece for piece in pieces if piece[2]]
+            coding = bool(coding_pieces)
+            if coding:
+                first, last = coding_pieces[0][0], coding_pieces[-1][1]
+            else:
+                first, last = low, high
+            centre = MARGIN + (geometry.x(first) + geometry.x(last + 1)) / 2.0 * scale
             label = ''
             if centre - last_label >= LABEL_GAP:
                 label, last_label = str(index + 1), centre
             count = int(self.exon_guides[index])
-            coding = any(piece[2] for piece in pieces)
             exons.append({
                 'number': index + 1,
                 'blocks': blocks,
@@ -394,9 +410,8 @@ class Coverage(object):
             for index in np.unique(self._row_bins[rows]):
                 highlight.append({'x': round(MARGIN + index * bin_width, 2),
                                   'width': round(max(1.4, bin_width - 0.6), 2)})
-        counts = [{'cls': name, 'label': CLASS_LABELS[name],
-                   'count': self.class_counts.get(name, 0)}
-                  for name in CLASSES if self.class_counts.get(name)]
+        counts = [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
+                  for name, count in self.class_counts.items() if count]
         return {'exons': exons, 'bins': bins, 'highlight': highlight,
                 'width': WIDTH, 'height': HEIGHT,
                 'midline': MIDLINE, 'margin': MARGIN, 'counts': counts,
@@ -407,7 +422,7 @@ class Coverage(object):
         # The scale spans the squares it shades: silent ones are drawn grey, so a
         # large synonymous count does not wash out the rest.
         shaded = [count for key, count in self.matrix_counts.items()
-                  if count and key.split('-')[0] != key.split('-')[1]]
+                  if len(set(key.split('-'))) == 2]
         low, high = min(shaded + [1]), max(shaded + [1])
         cells = []
         for down, source in enumerate(RESIDUES):
