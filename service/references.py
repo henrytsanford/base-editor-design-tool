@@ -58,6 +58,17 @@ class References(object):
             (transcript_id,)).fetchone()
         return row is not None
 
+    def gene_name(self, transcript_id):
+        """The symbol of the gene a transcript belongs to, for page headings.
+
+        Empty when the transcript is not in the bundle or has no symbol, so a heading
+        falls back to the ID alone.
+        """
+        row = self._db().execute(
+            'SELECT gene_name FROM transcript WHERE transcript_id = ?',
+            (transcript_id,)).fetchone()
+        return (row[0] or '') if row else ''
+
     def geometry(self, transcript_id):
         """A transcript's exons, coding spans and strand, for the coverage map.
 

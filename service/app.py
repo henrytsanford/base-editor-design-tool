@@ -39,7 +39,8 @@ from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PAR
                      parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
-from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
+from .results import (ANY_MATCH, MUTATION_COLUMN, ResultCache, ResultTable,
+                      UnknownFilterValue)
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -224,13 +225,16 @@ def create_app(settings=None):
 
         key = cache_key(transcript_id, params, references.release,
                         references.clinvar_version, ENGINE_VERSION)
+        gene = references.gene_name(transcript_id)
+        heading = '%s %s' % (gene, transcript_id) if gene else transcript_id
 
         manifest = _manifest(app.state.storage, key)
         if manifest is not None and manifest.get('designs', 0) > settings.table_max_rows:
-            return _download_only(request, transcript_id, params, manifest)
+            return _download_only(request, heading, params, manifest)
         if manifest is not None:
             try:
-                return _table(request, key, transcript_id, params, view, manifest)
+                return _table(request, key, transcript_id, heading, params, view,
+                              manifest)
             except UnknownFilterValue as e:
                 return bad_request(
                     request, 'No guide in this result is annotated %s.' % e)
@@ -264,7 +268,7 @@ def create_app(settings=None):
             if started:
                 log.info('started %s for %s', key[:12], scrub(transcript_id))
 
-        return page(request, 'running.html', transcript_id=transcript_id)
+        return page(request, 'running.html', heading=heading)
 
     @app.get('/designs/download')
     def download(request: Request):
@@ -306,7 +310,7 @@ def create_app(settings=None):
         response.headers['Retry-After'] = str(POLL_SECONDS)
         return response
 
-    def _table(request, key, transcript_id, params, view, manifest):
+    def _table(request, key, transcript_id, heading, params, view, manifest):
         storage = app.state.storage
         references = app.state.references
 
@@ -321,7 +325,8 @@ def create_app(settings=None):
                 table.coverage = coverage.Coverage(
                     table.frame,
                     coverage.Geometry(shape['exons'], shape['cds'], shape['strand'],
-                                      params.intron_buffer))
+                                      params.intron_buffer),
+                    table.token_masks(MUTATION_COLUMN))
             return table
 
         table = app.state.tables.get(key, load)
@@ -371,10 +376,14 @@ def create_app(settings=None):
                 selection = table.coverage.selection(view.sub)
 
         return page(
-            request, 'table.html', transcript_id=transcript_id, params=params,
+            request, 'table.html', transcript_id=transcript_id, heading=heading,
+            params=params,
             view=view, columns=columns, result=result,
             map=map_view, matrix=matrix_view, selection=selection,
-            clear_coverage_url=designs_url(exon=None, sub=None),
+            # One per panel: each sits in the caption of the panel it undoes, so a
+            # link that cleared both would not match the sentence beside it.
+            clear_exon_url=designs_url(exon=None),
+            clear_sub_url=designs_url(sub=None),
             total=manifest.get('designs', table.total), facets=table.facets(),
             any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
@@ -385,12 +394,12 @@ def create_app(settings=None):
                     if values.get(name)],
             downloads=_downloads(values))
 
-    def _download_only(request, transcript_id, params, manifest):
+    def _download_only(request, heading, params, manifest):
         # Past TABLE_MAX_ROWS the parsed frame would cost more memory than a view is
         # worth (~1.3 KB a row), so the result is never parsed; the files are the
         # result, byte-identical to what the CLI writes.
         return page(
-            request, 'download.html', transcript_id=transcript_id, params=params,
+            request, 'download.html', heading=heading, params=params,
             total=manifest['designs'], limit=settings.table_max_rows,
             downloads=_downloads(values_of(request.query_params)))
 

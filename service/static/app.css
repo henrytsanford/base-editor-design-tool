@@ -21,7 +21,7 @@ footer { border-top: 1px solid var(--line); padding: 12px 20px;
 footer a { color: inherit; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 p { margin: 6px 0; }
-.muted { color: var(--muted); font-size: 13px; }
+.muted { font-size: 13px; }
 .status { font-size: 14px; }
 .error { color: #b00; }
 .scroll { overflow-x: auto; border: 1px solid var(--line); margin-top: 12px; }
@@ -65,6 +65,8 @@ th.asc a::after { content: " \2191"; }
 th.desc a::after { content: " \2193"; }
 
 .pager { margin: 12px 0; display: flex; gap: 16px; align-items: center; }
+/* Grey is what marks an unavailable Previous/Next as not a link. */
+.pager .muted { color: var(--muted); }
 .downloads { margin: 12px 0 16px; }
 .downloads h2 { font-size: 15px; margin: 0 0 4px; }
 .downloads ul { list-style: none; padding: 0; margin: 0 0 4px; }
@@ -84,7 +86,7 @@ th.desc a::after { content: " \2193"; }
 .panel figcaption h2 { font-size: 15px; margin: 0 0 4px; }
 .panel figcaption p { margin: 0 0 10px; }
 .viz { width: 100%; height: auto; display: block; }
-.viz text { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+.viz text { font-family: var(--sans); font-size: 11px; fill: var(--fg); }
 .viz .end { text-anchor: end; }
 .viz .spine { stroke: #bbb; stroke-width: 1; }
 .viz .exon rect { fill: var(--exon-block); }
@@ -92,11 +94,16 @@ th.desc a::after { content: " \2193"; }
 .viz .exon.on rect { fill: var(--accent); }
 .viz .exl { text-anchor: middle; font-size: 9px; font-weight: 600; fill: #fff;
             pointer-events: none; }
-.viz .c-lof { fill: var(--lof); } .viz .c-mis { fill: var(--mis); }
-.viz .c-sil { fill: var(--sil); } .viz .c-nc { fill: var(--nc); }
-.viz .c-none { fill: var(--none); }
+/* One class per consequence: `fill` for the map's bars, `background` for the
+   legend swatches, so the two cannot drift apart. */
+.c-lof { fill: var(--lof); background: var(--lof); }
+.c-mis { fill: var(--mis); background: var(--mis); }
+.c-sil { fill: var(--sil); background: var(--sil); }
+.c-nc { fill: var(--nc); background: var(--nc); }
+.c-none { fill: var(--none); background: var(--none); }
 .viz .hit { fill: transparent; }
 .viz .bin:hover .hit { fill: rgba(0, 0, 0, .06); }
+.viz .hl { pointer-events: none; }
 .viz .hl .band { fill: var(--accent); fill-opacity: .16; }
 .viz .hl .tick { fill: var(--accent); }
 
@@ -111,27 +118,26 @@ th.desc a::after { content: " \2193"; }
 .viz.mtx .cell.on rect { stroke: var(--accent); stroke-width: 2.5; }
 .viz.mtx .sep { stroke: #999; stroke-width: 1; }
 .viz.mtx .frame { fill: none; stroke: #999; stroke-width: 1; }
-.viz.mtx .rl { text-anchor: end; fill: var(--fg); font-size: 10px; }
-.viz.mtx .cl { text-anchor: middle; fill: var(--fg); font-size: 10px; }
+.viz.mtx .rl { text-anchor: end; font-size: 10px; }
+.viz.mtx .cl { text-anchor: middle; font-size: 10px; }
 .viz.mtx .cl.rot { text-anchor: end; font-size: 9px; }
 .viz.mtx .gl { text-anchor: end; font-size: 10px; }
 .viz.mtx .gl.mid { text-anchor: middle; }
-.viz.mtx .ax { text-anchor: middle; fill: var(--fg); font-size: 12px; }
+.viz.mtx .ax { text-anchor: middle; font-size: 12px; }
 
-.key { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap;
-       gap: 3px 14px; font-size: 12px; color: var(--muted); }
+/* The legend sits in the caption, above its chart, and carries the counts. */
+.key { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-wrap: wrap;
+       gap: 3px 14px; font-size: 12px; color: var(--fg); }
+.key .total { font-weight: 600; }
 .key li { display: flex; align-items: center; gap: 6px; }
 .key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
-.key i.c-lof { background: var(--lof); } .key i.c-mis { background: var(--mis); }
-.key i.c-sil { background: var(--sil); } .key i.c-nc { background: var(--nc); }
-.key i.c-none { background: var(--none); box-shadow: inset 0 0 0 1px #ccc; }
+.key i.c-none { box-shadow: inset 0 0 0 1px #ccc; }
 .key i.hl { background: var(--accent); }
-.key.ramp i { border-radius: 0; width: 18px; }
+/* The matrix's one legend entry: a gradient between its two end counts, sized to
+   sit on the caption's line rather than to be read off. */
 .key.ramp .bar { width: 120px; height: 11px; display: inline-block; }
-.key.ramp i.sil { background: var(--sil-cell); }
-.key.ramp i.off { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
 
-.picked { font-size: 14px; background: #f3fbf6; border: 1px solid #cfe9db;
-          border-radius: 4px; padding: 8px 12px; margin: 12px 0 0; }
-.tally { font-size: 12px; color: var(--muted); margin: 8px 0 0;
-         border-top: 1px solid var(--line); padding-top: 8px; }
+/* Stands in for a panel's caption text while something on it is selected, so it
+   takes that text's size and rhythm rather than a banner's. */
+.picked { font-size: 13px; background: #f3fbf6; border: 1px solid #cfe9db;
+          border-radius: 4px; padding: 6px 10px; margin: 0 0 8px; }

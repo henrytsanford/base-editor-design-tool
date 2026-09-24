@@ -80,7 +80,12 @@ def _masks_from(positions, length):
     return masks
 
 
-def _token_masks(values):
+def split_tokens(cell):
+    """The entries of one ';'-joined cell, which ends in a trailing ';'."""
+    return [token for token in cell.split(';') if token] if cell else []
+
+
+def token_masks(values):
     """Boolean masks, one per token appearing in a ';'-joined column.
 
     Built from the split cells rather than a substring test: 'Benign',
@@ -89,11 +94,8 @@ def _token_masks(values):
     """
     positions = {}
     for row, cell in enumerate(values):
-        if not cell:
-            continue
-        for token in cell.split(';'):
-            if token:
-                positions.setdefault(token, []).append(row)
+        for token in split_tokens(cell):
+            positions.setdefault(token, []).append(row)
     return _masks_from(positions, len(values))
 
 
@@ -121,7 +123,7 @@ class ResultTable(object):
         self.columns = list(self.frame.columns)
         self.total = len(self.frame)
         self._masks = {
-            column: _token_masks(self.frame[column].to_numpy())
+            column: token_masks(self.frame[column].to_numpy())
             for column in TOKEN_COLUMNS if column in self.frame.columns}
         self._masks.update(
             (column, _value_masks(self.frame[column].to_numpy()))
@@ -158,6 +160,10 @@ class ResultTable(object):
             'significance': counted(SIGNIFICANCE_COLUMN, skip=(NO_MATCH,)),
             'any_match': int(self._any_match.sum()),
         }
+
+    def token_masks(self, column):
+        """Every token's row mask for one ';'-joined column."""
+        return self._masks.get(column, {})
 
     def _token_mask(self, column, token):
         masks = self._masks.get(column, {})

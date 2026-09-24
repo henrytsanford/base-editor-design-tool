@@ -27,7 +27,7 @@ import pandas as pd
 
 from bedesign.engine import get_aa_map
 
-from .results import MUTATION_COLUMN, SIGNIFICANCE_COLUMN
+from .results import MUTATION_COLUMN, SIGNIFICANCE_COLUMN, split_tokens, token_masks
 
 POSITION_COLUMN = 'sgrna genomic position'
 STRAND_COLUMN = 'sgRNA Strand'
@@ -41,6 +41,7 @@ BINS = 300
 # width the page gives it.
 WIDTH = 1000
 HEIGHT = 230
+MARGIN = 10           # either side of the gene map
 MIDLINE = 118
 BAR_MAX = 78          # tallest a bin's stack may be drawn
 CDS_HEIGHT = 16       # a coding exon block
@@ -148,15 +149,16 @@ class Geometry(object):
         # An intron is drawn as the buffer either side plus a fixed stub, so a long
         # intron does not squeeze the exons into invisibility.
         self.gap = 2 * buffer + 24
-        self.offsets = []
+        offsets = []
         x = buffer
         for low, high in self.exons:
-            self.offsets.append(x)
+            offsets.append(x)
             x += high - low + 1 + self.gap
         self.width = max(x - self.gap + buffer, 1)
+        self.offsets = np.array(offsets, dtype=np.float64)
         self._lows = np.array([low for low, _ in self.exons], dtype=np.float64)
         self._highs = np.array([high for _, high in self.exons], dtype=np.float64)
-        self._offsets = np.array(self.offsets, dtype=np.float64)
+        self._parts = self._split_parts()
 
     def place(self, positions):
         """Oriented coordinates as (positions along the drawing, nearest exon index).
@@ -175,16 +177,16 @@ class Geometry(object):
         # Inside an exon the drawing runs base for base; past the last one it keeps
         # running, which is the same expression, so only the clamp is separate.
         inside = positions >= low
-        within = self._offsets[index] + (positions - low)
+        within = self.offsets[index] + (positions - low)
         after = positions - previous_high
         before = low - positions
-        upstream = (self._offsets[previous] + (previous_high - previous_low)
+        upstream = (self.offsets[previous] + (previous_high - previous_low)
                     + np.minimum(after, half))
-        downstream = self._offsets[index] - np.minimum(before, half)
+        downstream = self.offsets[index] - np.minimum(before, half)
         intron = np.where(after <= before, upstream, downstream)
         # Before the first exon there is no previous one to measure from.
         intron = np.where(index == 0,
-                          np.maximum(0.0, self._offsets[0] - before), intron)
+                          np.maximum(0.0, self.offsets[0] - before), intron)
         layout = np.minimum(np.where(inside, within, intron), self.width)
 
         # The nearer of the two exons it sits between; a tie goes to the earlier one.
@@ -194,55 +196,48 @@ class Geometry(object):
 
     def parts(self, index):
         """(low, high, is_coding) pieces of one exon, so UTR draws thinner."""
-        low, high = self.exons[index]
-        pieces, cursor = [], low
-        for coding_low, coding_high in self.cds:
-            start, end = max(low, coding_low), min(high, coding_high)
-            if start > end:
-                continue
-            if start > cursor:
-                pieces.append((cursor, start - 1, False))
-            pieces.append((start, end, True))
-            cursor = end + 1
-        if cursor <= high:
-            pieces.append((cursor, high, False))
-        return pieces
+        return self._parts[index]
 
-
-def _tokens(cell):
-    return [token for token in cell.split(';') if token] if cell else []
+    def _split_parts(self):
+        """Every exon's pieces, in one merge pass: exons and CDS spans are both
+        sorted, so each span is visited only by the exons it overlaps."""
+        split, first = [], 0
+        for low, high in self.exons:
+            while first < len(self.cds) and self.cds[first][1] < low:
+                first += 1
+            pieces, cursor, span = [], low, first
+            while span < len(self.cds) and self.cds[span][0] <= high:
+                start = max(low, self.cds[span][0])
+                end = min(high, self.cds[span][1])
+                if start > cursor:
+                    pieces.append((cursor, start - 1, False))
+                pieces.append((start, end, True))
+                cursor = end + 1
+                span += 1
+            if cursor <= high:
+                pieces.append((cursor, high, False))
+            split.append(pieces)
+        return split
 
 
 class Coverage(object):
     """The two panels, and the masks that let the table answer to them."""
 
-    def __init__(self, frame, geometry):
+    def __init__(self, frame, geometry, category_masks=None):
+        """`category_masks` are the table's own masks for MUTATION_COLUMN, so the
+        column is split once per result; built from `frame` when not given."""
         self.geometry = geometry
         self.total = len(frame)
-        self.matrix_pathogenic = defaultdict(int)
-        self._bins = [[defaultdict(int), defaultdict(int)] for _ in range(BINS)]
-        self.class_counts = defaultdict(int)
-        # Per row: the exon its guide sits in (-1 when its position did not parse) and
-        # the bin it landed in, so a selected substitution can be marked on the map
-        # without walking the frame again.
-        self._row_exons = np.full(self.total, -1, dtype=np.int32)
-        self._row_bins = np.zeros(self.total, dtype=np.int32)
-        substitution_rows, sites = defaultdict(list), defaultdict(set)
-        if self.total:
-            self._scan(frame, substitution_rows, sites)
-        # A guide that makes the same substitution at two residues is one guide, and
-        # the square has to report the number the table will show when it is clicked.
-        self._substitution_rows = {key: np.unique(np.asarray(rows, dtype=np.int32))
-                                   for key, rows in substitution_rows.items()}
+        if category_masks is None:
+            category_masks = token_masks(frame[MUTATION_COLUMN].to_numpy())
+        self._scan(frame, category_masks)
         self.matrix_counts = {key: len(rows)
                               for key, rows in self._substitution_rows.items()}
-        self.matrix_sites = {key: len(found) for key, found in sites.items()}
         drawn = self._row_exons[self._row_exons >= 0]
         self.exon_guides = np.bincount(drawn, minlength=len(geometry.exons))
-        self.peak = max([sum(side.values()) for pair in self._bins for side in pair]
-                        + [1])
+        self.peak = max(int(self._bins.sum(axis=2).max()), 1)
 
-    def _scan(self, frame, substitution_rows, sites):
+    def _scan(self, frame, category_masks):
         """One pass over the frame, filling both panels.
 
         Read column by column as numpy arrays rather than row by row: on TTN's 25,662
@@ -250,34 +245,38 @@ class Coverage(object):
         """
         positions = pd.to_numeric(frame[POSITION_COLUMN], errors='coerce').to_numpy()
         senses = (frame[STRAND_COLUMN].to_numpy() == 'sense')
-        categories = frame[MUTATION_COLUMN].to_numpy() if MUTATION_COLUMN in frame else None
-        amino = frame[AA_COLUMN].to_numpy() if AA_COLUMN in frame else None
-        significance = (frame[SIGNIFICANCE_COLUMN].to_numpy()
-                        if SIGNIFICANCE_COLUMN in frame else None)
+        amino = frame[AA_COLUMN].to_numpy()
+        significance = frame[SIGNIFICANCE_COLUMN].to_numpy()
 
         # Placed in one pass; a row whose position did not parse is dropped from the
         # drawing but still counted in the table, so the two never disagree about how
-        # many guides there are.
+        # many guides there are. Per row, the exon (-1 when undrawn) and the bin are
+        # kept so a selected substitution can be marked without walking the frame.
         drawable = np.isfinite(positions)
         oriented = np.where(drawable, positions, 0.0) * self.geometry.strand
         places, exons = self.geometry.place(oriented)
-        indices = np.clip((places / self.geometry.width * BINS).astype(np.int32),
-                          0, BINS - 1)
-        self._row_bins = indices
+        self._row_bins = np.clip((places / self.geometry.width * BINS).astype(np.int32),
+                                 0, BINS - 1)
         self._row_exons = np.where(drawable, exons, -1).astype(np.int32)
 
-        for row in np.flatnonzero(drawable):
-            categories_here = _tokens(categories[row]) if categories is not None else []
-            worst = 'none'
-            for category in categories_here:
-                name = CATEGORY_CLASS.get(category, 'nc')
-                if CLASS_RANK[name] < CLASS_RANK[worst]:
-                    worst = name
-            self._bins[indices[row]][0 if senses[row] else 1][worst] += 1
-            self.class_counts[worst] += 1
+        # Each row's worst class, as a rank into CLASSES: every category lowers the
+        # rank of the rows carrying it to its own class's, if that is worse.
+        worst = np.full(self.total, CLASS_RANK['none'], dtype=np.int32)
+        for category, mask in category_masks.items():
+            rank = CLASS_RANK[CATEGORY_CLASS.get(category, 'nc')]
+            worst[mask] = np.minimum(worst[mask], rank)
+        # Counts per (bin, strand side, class), sense above the line as side 0.
+        cell = ((self._row_bins * 2 + (~senses).astype(np.int32)) * len(CLASSES)
+                + worst)[drawable]
+        self._bins = np.bincount(cell, minlength=BINS * 2 * len(CLASSES)).reshape(
+            BINS, 2, len(CLASSES))
+        self.class_counts = dict(zip(CLASSES, self._bins.sum(axis=(0, 1)).tolist()))
 
-            edits = _tokens(amino[row]) if amino is not None else []
-            marks = _tokens(significance[row]) if significance is not None else []
+        substitution_rows, sites = defaultdict(list), defaultdict(set)
+        self.matrix_pathogenic = defaultdict(int)
+        for row in np.flatnonzero(drawable):
+            edits = split_tokens(amino[row])
+            marks = split_tokens(significance[row])
             for position_in_list, edit in enumerate(edits):
                 match = AA_EDIT.match(edit)
                 if not match:
@@ -291,6 +290,11 @@ class Coverage(object):
                 mark = marks[position_in_list] if position_in_list < len(marks) else ''
                 if mark in PATHOGENIC:
                     self.matrix_pathogenic[key] += 1
+        # A guide that makes the same substitution at two residues is one guide, and
+        # the square has to report the number the table will show when it is clicked.
+        self._substitution_rows = {key: np.unique(np.asarray(rows, dtype=np.int32))
+                                   for key, rows in substitution_rows.items()}
+        self.matrix_sites = {key: len(found) for key, found in sites.items()}
 
     # ---- filters -------------------------------------------------------------
 
@@ -315,8 +319,8 @@ class Coverage(object):
     def map_view(self, selected_exon=0, selected_substitution=''):
         """The gene map: exon blocks, binned guide stacks, and any highlight."""
         geometry = self.geometry
-        scale = (WIDTH - 20) / geometry.width
-        bin_width = (WIDTH - 20) / BINS
+        scale = (WIDTH - 2 * MARGIN) / geometry.width
+        bin_width = (WIDTH - 2 * MARGIN) / BINS
         exons = []
         last_label = -LABEL_GAP
         for index, (low, high) in enumerate(geometry.exons):
@@ -324,14 +328,14 @@ class Coverage(object):
             offset = geometry.offsets[index] - low
             blocks = []
             for start, end, coding in pieces:
-                x0 = 10 + (offset + start) * scale
-                x1 = 10 + (offset + end) * scale + scale
+                x0 = MARGIN + (offset + start) * scale
+                x1 = MARGIN + (offset + end) * scale + scale
                 height = CDS_HEIGHT if coding else UTR_HEIGHT
                 blocks.append({'x': round(x0, 2),
                                'width': round(max(0.8, x1 - x0), 2),
                                'y': round(MIDLINE - height / 2.0, 2),
                                'height': height})
-            centre = 10 + (geometry.offsets[index] + (high - low) / 2.0) * scale
+            centre = MARGIN + (geometry.offsets[index] + (high - low) / 2.0) * scale
             label = ''
             if centre - last_label >= LABEL_GAP:
                 label, last_label = str(index + 1), centre
@@ -349,16 +353,16 @@ class Coverage(object):
             })
 
         bins = []
-        for index, (up, down) in enumerate(self._bins):
-            total = sum(up.values()) + sum(down.values())
+        for index, sides in enumerate(self._bins.tolist()):
+            both = [up + down for up, down in zip(*sides)]
+            total = sum(both)
             if not total:
                 continue
-            x = 10 + index * bin_width
+            x = MARGIN + index * bin_width
             segments = []
-            for side, counts in ((0, up), (1, down)):
+            for side, counts in enumerate(sides):
                 edge = MIDLINE - 13 if side == 0 else MIDLINE + 13
-                for name in CLASSES:
-                    value = counts.get(name)
+                for name, value in zip(CLASSES, counts):
                     if not value:
                         continue
                     height = value / self.peak * BAR_MAX
@@ -376,22 +380,22 @@ class Coverage(object):
                 'title': '%d guide%s: %s' % (
                     total, '' if total == 1 else 's',
                     ', '.join('%d %s' % (n, CLASS_LABELS[c])
-                              for c in CLASSES
-                              for n in [up.get(c, 0) + down.get(c, 0)] if n)),
+                              for c, n in zip(CLASSES, both) if n)),
             })
 
         highlight = []
         if selected_substitution in self._substitution_rows:
             rows = self._substitution_rows[selected_substitution]
             for index in np.unique(self._row_bins[rows]):
-                highlight.append({'x': round(10 + index * bin_width, 2),
+                highlight.append({'x': round(MARGIN + index * bin_width, 2),
                                   'width': round(max(1.4, bin_width - 0.6), 2)})
         counts = [{'cls': name, 'label': CLASS_LABELS[name],
                    'count': self.class_counts.get(name, 0)}
                   for name in CLASSES if self.class_counts.get(name)]
         return {'exons': exons, 'bins': bins, 'highlight': highlight,
-                'peak': self.peak, 'width': WIDTH, 'height': HEIGHT,
-                'midline': MIDLINE, 'counts': counts, 'total': self.total}
+                'width': WIDTH, 'height': HEIGHT,
+                'midline': MIDLINE, 'margin': MARGIN, 'counts': counts,
+                'total': self.total}
 
     def matrix_view(self, selected=''):
         """The substitution matrix: 441 squares, whatever the gene."""
@@ -434,19 +438,16 @@ class Coverage(object):
                     'title': title,
                 })
 
-        rules, labels, groups = [], [], []
+        rules, groups = [], []
         edge = 0
         for name, members in RESIDUE_GROUPS:
             start = edge
             edge += len(members)
-            rules.append({'at': edge})
+            rules.append(edge)
             if name:
                 groups.append({'name': name,
                                'centre': round(start + len(members) / 2.0, 3)})
-        for index, residue in enumerate(RESIDUES):
-            # A label longer than a letter is turned on its side to fit its column.
-            labels.append({'text': ONE_LETTER[residue], 'index': index,
-                           'rotate': len(ONE_LETTER[residue]) > 1})
+        labels = [ONE_LETTER[residue] for residue in RESIDUES]
 
         size = len(RESIDUES) * CELL
         return {
