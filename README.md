@@ -108,10 +108,9 @@ The service ships as a container image with the reference bundle baked in;
 dependencies with `constraints.txt`, because `test/golden/` compares output byte for byte
 and `requirements.txt` only states floors.
 
-The hosted copy is meant to be public on Google Cloud Run, with no login: the app's own
-limits on how much work each visitor can start take the place of access control. It is
-access-restricted until those limits are fixed to work behind Cloud Run's front end;
-`deploy/README.md` lists what is left.
+The hosted copy is public on Google Cloud Run, with no login: the app's own limits on
+how much work each visitor can start take the place of access control.
+`deploy/README.md` covers how access is configured.
 
 One constraint worth knowing: the per-job wall-clock cap uses `signal.SIGALRM`,
 so the service needs a Unix host. On Windows, run the container rather than Python

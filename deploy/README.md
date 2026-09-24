@@ -62,14 +62,13 @@ counts against `--memory`.
 
 ## Access
 
-The service is meant to be public on Cloud Run: anyone with the URL can use it, with no
-login, and its own limits -- a per-client rate limit on starting designs, a bounded worker
-pool, a per-job time cap -- stand in for access control. `--max-instances 1` is what
-bounds the bill, since no amount of traffic can start a second instance.
+The service is public on Cloud Run: anyone with the URL can use it, with no login, and
+its own limits -- a per-client rate limit on starting designs, a bounded worker pool, a
+per-job time cap -- stand in for access control. `--max-instances 1` is what bounds the
+bill, since no amount of traffic can start a second instance. It is not IAM-restricted:
+`allUsers` holds `roles/run.invoker`.
 
-Until those limits are fixed to work on Cloud Run, it is deployed with
-`--no-allow-unauthenticated`, and only accounts granted `roles/run.invoker` can reach it.
-What has to change first:
+What those limits need in order to hold on Cloud Run:
 
 - **Identify clients correctly.** Done in code: `TRUSTED_PROXY_HOPS` reads
   `X-Forwarded-For` from the right. What is left is measuring the hop count on the
@@ -87,7 +86,7 @@ What has to change first:
 - **Survive a dead worker.** Done: a worker killed outright no longer leaves the pool
   unusable; it is replaced, and `/healthz` reports the crash (see "Watching it").
 
-Then set a billing budget alert, and open it with:
+Set a billing budget alert. A new deploy is opened to the public with:
 
     gcloud run services add-iam-policy-binding bedesign --region "$REGION" \
         --member=allUsers --role=roles/run.invoker

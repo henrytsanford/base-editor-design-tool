@@ -9,6 +9,8 @@ intron buffer {{ params.intron_buffer }} &middot;
 GC filter {{ params.filter_gc }}
 </p>
 
+{% include "_downloads.html" %}
+
 {# A GET form: applying a filter produces a URL that can be sent to someone. #}
 <form method="get" action="/designs" class="filters">
   {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">
@@ -75,8 +77,4 @@ GC filter {{ params.filter_gc }}
   {% else %}<span class="muted">Next &rarr;</span>{% endif %}
 </nav>
 {% endif %}
-
-<p class="downloads">Download the full result:
-{% for name, url in downloads %}<a href="{{ url }}">{{ name }}.tsv.gz</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}
-<span class="muted">&mdash; the complete file, not the filtered view.</span></p>
 {% endblock %}

@@ -362,10 +362,23 @@ def create_app(settings=None):
     return app
 
 
+# What each result file holds, in the order the page lists them: the file most
+# people want first. Written for a reader who has not run a base-editing screen.
+DOWNLOAD_DESCRIPTIONS = {
+    'designs': 'Every guide designed for this transcript: its sequence, the base change '
+               'it makes, and the resulting amino-acid change. Most people want this file.',
+    'clinvar': 'Guides whose edit recreates a known human variant in ClinVar, with that '
+               "variant's clinical significance.",
+    'errors': "Guides or regions that couldn't be designed, and why. Often empty.",
+}
+
+
 def _downloads(values):
     """Download links for a result: the design parameters, and nothing else."""
-    return [(name, build_url('/designs/download', values, DOWNLOAD_PARAMS, file=name))
-            for name in RESULT_FILES]
+    return [(RESULT_FILES[name],
+             build_url('/designs/download', values, DOWNLOAD_PARAMS, file=name),
+             description)
+            for name, description in DOWNLOAD_DESCRIPTIONS.items()]
 
 
 def _manifest(storage, key):

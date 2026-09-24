@@ -215,7 +215,7 @@ def test_a_result_past_the_table_limit_is_offered_as_downloads_only(
 def wait_for_table_or_downloads(client, url, seconds=90):
     for _ in range(seconds * 2):
         response = client.get(url)
-        if 'Download:' in response.text or 'sgRNA sequence' in response.text:
+        if 'Download the full result' in response.text or 'sgRNA sequence' in response.text:
             return response
         time.sleep(0.5)
     raise AssertionError('design did not finish within %ds' % seconds)
@@ -259,10 +259,16 @@ class _Recorder(object):
         return self.fn(*args)
 
 
-def test_the_download_links_are_separated_by_a_real_middle_dot(client, cached_url):
-    """An entity inside an autoescaped expression renders as the text '&middot;'."""
+def test_the_downloads_are_described_above_the_table(client, cached_url):
+    """Someone new to base editing should not have to scroll past the table, or
+    guess from a filename, to find the file they want."""
     text = client.get(cached_url).text
-    assert '&amp;middot;' not in text
+    assert text.index('designs.tsv.gz') < text.index('<table')
+    for filename, description in [('designs.tsv.gz', 'Most people want this file'),
+                                  ('clinvar.tsv.gz', 'known human variant'),
+                                  ('errors.tsv.gz', 'Often empty')]:
+        assert filename in text and description in text
+    assert '&amp;mdash;' not in text
 
 
 def test_starting_jobs_too_fast_is_rate_limited(refdata, clinvar_db, tmp_path,

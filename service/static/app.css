@@ -54,6 +54,10 @@ th.asc a::after { content: " \2191"; }
 th.desc a::after { content: " \2193"; }
 
 .pager { margin: 12px 0; display: flex; gap: 16px; align-items: center; }
-.downloads { margin-top: 16px; font-size: 13px; }
+.downloads { margin: 12px 0 16px; }
+.downloads h2 { font-size: 15px; margin: 0 0 4px; }
+.downloads ul { list-style: none; padding: 0; margin: 0 0 4px; }
+.downloads li { margin: 2px 0; font-size: 14px; }
+.downloads li a { font-weight: 600; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
