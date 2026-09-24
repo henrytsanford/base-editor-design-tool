@@ -1,30 +1,35 @@
 {# The result files, with what each one holds. Its own file so the table page
    and the download-only page list them the same way. Most visitors come for the
    designs file and nothing else, so it is the one button; the other two are there
-   for whoever needs them.
+   for whoever needs them. Every file is named for what it holds and described in
+   visible text, since a filename tells a newcomer nothing and nobody hovers.
 
-   `compact` is the table page's form: one block beside the heading, so the charts
-   and the table start near the top, with each file's description on hover. The
-   download-only page has nothing else to show, so it writes them out. #}
-{% set filename, url, description = downloads[0] %}
+   `compact` is the table page's form: one narrow column beside the heading, so the
+   charts and the table start near the top. The download-only page has nothing else
+   to show, so it gives the files more room. #}
+{% set label, filename, url, description = downloads[0] %}
 {% if compact %}
 <section class="download-bar" aria-label="Download the full result">
-  <a class="button download" href="{{ url }}" title="{{ description }}">Download {{ filename }}</a>
-  <p class="also">
-  {% for filename, url, description in downloads[1:] %}<a href="{{ url }}" title="{{ description }}">{{ filename }}</a>{{ ' &middot; '|safe if not loop.last else '' }}{% endfor %}
-  <br>Always the complete result, not the filtered view.</p>
+  <a class="button download" href="{{ url }}">Download {{ label|lower }}</a>
+  <p class="primary-note">{{ description }} <span class="filename">({{ filename }})</span></p>
+  <ul class="also">
+  {% for label, filename, url, description in downloads[1:] %}
+  <li><a href="{{ url }}">{{ label }}</a> <span class="filename">({{ filename }})</span>
+  &mdash; {{ description }}</li>
+  {% endfor %}
+  </ul>
 </section>
 {% else %}
 <section class="downloads">
 <h2>Download the full result</h2>
 <div class="primary">
-  <a class="button download" href="{{ url }}">Download {{ filename }}</a>
-  <p>{{ description }} A gzipped table: always the complete result, not the
-  filtered view.</p>
+  <a class="button download" href="{{ url }}">Download {{ label|lower }}</a>
+  <p>{{ description }} <span class="muted">({{ filename }})</span></p>
 </div>
 <ul class="also">
-{% for filename, url, description in downloads[1:] %}
-<li><a href="{{ url }}">{{ filename }}</a> <span class="muted">&mdash; {{ description }}</span></li>
+{% for label, filename, url, description in downloads[1:] %}
+<li><a href="{{ url }}">{{ label }}</a> <span class="muted">({{ filename }})</span>
+&mdash; {{ description }}</li>
 {% endfor %}
 </ul>
 </section>

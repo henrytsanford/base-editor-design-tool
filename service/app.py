@@ -431,14 +431,18 @@ def create_app(settings=None):
     return app
 
 
-# What each result file holds, in the order the page lists them: the file most
-# people want first. Written for a reader who has not run a base-editing screen.
+# Each result file's plain-language name and what it holds, in the order the page
+# lists them: the file most people want first. Written for a reader who has not run
+# a base-editing screen, so it names what a row is rather than the filename.
 DOWNLOAD_DESCRIPTIONS = {
-    'designs': 'Every guide designed for this transcript: its sequence, the base change '
-               'it makes, and the resulting amino-acid change. Most people want this file.',
-    'clinvar': 'Guides whose edit recreates a known human variant in ClinVar, with that '
-               "variant's clinical significance.",
-    'errors': "Guides or regions that couldn't be designed, and why. Often empty.",
+    'designs': ('All guides',
+                'One row per guide: its sequence, the DNA letter it changes, and the '
+                'effect on the protein. Most people want this file.'),
+    'clinvar': ('Guides matching known variants',
+                'Guides whose edit recreates a known human variant listed in ClinVar, '
+                'with whether that variant is linked to disease.'),
+    'errors': ('Design problems',
+               "Parts of the gene that couldn't be designed, and why. Often empty."),
 }
 
 
@@ -458,10 +462,10 @@ TABLE_COLUMNS = (
 
 def _downloads(values):
     """Download links for a result: the design parameters, and nothing else."""
-    return [(RESULT_FILES[name],
+    return [(label, RESULT_FILES[name],
              build_url('/designs/download', values, DOWNLOAD_PARAMS, file=name),
              description)
-            for name, description in DOWNLOAD_DESCRIPTIONS.items()]
+            for name, (label, description) in DOWNLOAD_DESCRIPTIONS.items()]
 
 
 def _manifest(storage, key):

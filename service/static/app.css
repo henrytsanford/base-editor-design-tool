@@ -112,10 +112,15 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
    narrow screen, the downloads then sitting under the heading. */
 .result-head { display: flex; flex-wrap: wrap; align-items: flex-start;
                justify-content: space-between; gap: 10px 24px; }
-.download-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/* A capped width, so the descriptions wrap in their column rather than pushing the
+   heading off the row. */
+.download-bar { max-width: 440px; font-size: 13px; }
 .download-bar a.button.download { font-size: 15px; padding: 8px 16px; }
-.download-bar .also { margin: 0; font-size: 13px; color: var(--muted); }
-.download-bar .also a { font-weight: 600; }
+.download-bar .primary-note { margin: 6px 0 4px; }
+.download-bar ul.also { list-style: none; padding: 0; margin: 0; }
+.download-bar li { margin: 2px 0; }
+.download-bar li a { font-weight: 600; }
+.download-bar .filename { color: var(--muted); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
 

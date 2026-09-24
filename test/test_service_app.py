@@ -265,11 +265,15 @@ def test_the_downloads_are_described_above_the_table(client, cached_url):
     """Someone new to base editing should not have to scroll past the table, or
     guess from a filename, to find the file they want."""
     text = client.get(cached_url).text
-    assert text.index('designs.tsv.gz') < text.index('<table')
-    for filename, description in [('designs.tsv.gz', 'Most people want this file'),
-                                  ('clinvar.tsv.gz', 'known human variant'),
-                                  ('errors.tsv.gz', 'Often empty')]:
-        assert filename in text and description in text
+    # A description only in a hover title is one nobody reads.
+    visible = re.sub(r'title="[^"]*"', '', text)
+    table = visible.index('<table')
+    for label, filename, description in [
+            ('all guides', 'designs.tsv.gz', 'Most people want this file'),
+            ('Guides matching known variants', 'clinvar.tsv.gz', 'known human variant'),
+            ('Design problems', 'errors.tsv.gz', 'Often empty')]:
+        for piece in (label, filename, description):
+            assert -1 < visible.find(piece) < table, piece
     assert '&amp;mdash;' not in text
 
 
