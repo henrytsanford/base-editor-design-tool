@@ -1,4 +1,6 @@
 :root { --fg: #1a1a1a; --muted: #666; --line: #ddd; --bg: #fff; --accent: #0b5;
+        /* The accent's pale tint, for hover and highlighted blocks, and its border. */
+        --accent-tint: #f3fbf6; --accent-line: #bfe6cd;
         /* What a guide does, on the coverage map. Categorical: each consequence is
            its own hue, with no severity implied by colour. Checked against this
            page's white for colour-vision separation -- worst pair dE 9.2 -- so
@@ -6,10 +8,9 @@
            grey, which is what keeps colour meaning "this changes the protein". */
         --lof: #eb6834; --mis: #2a78d6; --sil: #1baf7a;
         --nc: #b9b9b9; --none: #e4e4e4;
-        /* Count on the substitution matrix is a continuous ramp, set per square
-           from coverage.RAMP rather than here. */
+        /* The substitution matrix uses these same hues, with its count as the
+           fill's opacity, set per square in coverage.py. */
         --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        --sil-cell: #ececec;
         /* Selection is ink, not a hue: every hue on the charts means a consequence.
            The exon grey is kept light enough that a selected exon, drawn in ink,
            stands out from it. */
@@ -51,7 +52,7 @@ button, a.button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0
    The inset shadow stands in for a border, so both are the same size. */
 a.button.secondary { background: var(--bg); color: var(--accent);
                      box-shadow: inset 0 0 0 1px var(--accent); }
-a.button.secondary:hover { background: #f3fbf6; }
+a.button.secondary:hover { background: var(--accent-tint); }
 details.advanced { margin: 4px 0 14px; }
 details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
@@ -60,12 +61,13 @@ form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 14p
                border: 1px solid var(--line); border-radius: 6px; padding: 12px;
                margin-bottom: 12px; }
 form.filters .field { margin-bottom: 0; }
-form.filters button { margin-right: 8px; }
+/* Apply and Clear wrap as one, so Clear never lands on a line of its own. */
+form.filters .actions { display: flex; gap: 8px; }
 
 /* Gene list */
 .badge { font-size: 11px; font-weight: 600; color: #fff; background: var(--accent);
          border-radius: 3px; padding: 1px 5px; margin-left: 4px; }
-tr.preferred td { background: #f3fbf6; }
+tr.preferred td { background: var(--accent-tint); }
 a.go { font-weight: 600; }
 ul.matches { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
 
@@ -78,22 +80,46 @@ th.desc a::after { content: " \2193"; }
 .pager { margin: 12px 0; display: flex; gap: 16px; align-items: center; }
 /* Grey is what marks an unavailable Previous/Next as not a link. */
 .pager .muted { color: var(--muted); }
-.downloads { margin: 12px 0 16px; }
-.downloads h2 { font-size: 15px; margin: 0 0 4px; }
-.downloads ul { list-style: none; padding: 0; margin: 0 0 4px; }
+/* The downloads are what most visitors came for, so they are the first thing under
+   the heading and the only tinted block on the page. */
+.downloads { margin: 14px 0 18px; padding: 14px 16px; border-radius: 6px;
+             background: var(--accent-tint); border: 1px solid var(--accent-line); }
+.downloads h2 { font-size: 16px; margin: 0 0 10px; }
+.downloads .primary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.downloads .primary p { margin: 0; flex: 1 1 320px; font-size: 14px; }
+a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
+.downloads ul.also { list-style: none; padding: 0; margin: 12px 0 0;
+                     border-top: 1px solid #d5eedd; padding-top: 8px; }
 .downloads li { margin: 2px 0; font-size: 14px; }
 .downloads li a { font-weight: 600; }
+/* On the table page: heading left, downloads right, one row. It wraps to two on a
+   narrow screen, the downloads then sitting under the heading. */
+.result-head { display: flex; flex-wrap: wrap; align-items: flex-start;
+               justify-content: space-between; gap: 10px 24px; }
+.download-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.download-bar a.button.download { font-size: 15px; padding: 8px 16px; }
+.download-bar .also { margin: 0; font-size: 13px; color: var(--muted); }
+.download-bar .also a { font-weight: 600; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Coverage panels: the gene map and the substitution matrix, above the table.
-   Both are server-rendered SVG styled only by class, so style-src stays 'self'. */
-.coverage { margin: 16px 0; }
-.panels { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
-.panel { flex: 1 1 380px; min-width: 0; margin: 0;
+/* Coverage panels: the gene map full width, then the substitution matrix beside the
+   filters. Both are server-rendered SVG styled only by class, so style-src stays
+   'self'. */
+.panel { min-width: 0; margin: 0;
          border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
-.panel.matrix { flex: 0 1 560px; }
-.panel.matrix .viz { max-width: 470px; margin: 0 auto; }
+.panel.map { margin: 16px 0 18px; }
+.workbench { display: grid; grid-template-columns: minmax(0, 480px) minmax(0, 1fr);
+             gap: 18px; align-items: start; margin-bottom: 12px; }
+/* Beside the matrix the filters sit in a grid whose controls fill their cells, so
+   the form uses the column's width rather than a ragged left edge. */
+.workbench form.filters { display: grid; gap: 12px 14px; align-items: end;
+                          grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.workbench form.filters select { width: 100%; max-width: none; }
+.workbench form.filters .checkbox, .workbench form.filters .actions { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .workbench { grid-template-columns: minmax(0, 1fr); }
+}
 .panel figcaption h2 { font-size: 15px; margin: 0 0 4px; }
 .panel figcaption p { margin: 0 0 10px; }
 .viz { width: 100%; height: auto; display: block; }
@@ -114,17 +140,14 @@ th.desc a::after { content: " \2193"; }
 .c-none { fill: var(--none); background: var(--none); }
 .viz .hit { fill: transparent; }
 .viz .bin:hover .hit { fill: rgba(0, 0, 0, .06); }
-.viz .hl { pointer-events: none; }
-.viz .hl .band { fill: var(--select); fill-opacity: .1; }
-.viz .hl .tick { fill: var(--select); }
+/* A selected substitution fades everything but its own guides: a whole bin that
+   holds none of them, and the rest of a bin's stack where it does. */
+.viz .bin.dim rect, .viz .bin rect.dim { opacity: .15; }
 
 /* The matrix. Empty squares are the answer to "can this editor do it at all", so
    they are drawn rather than left out. */
 .viz.mtx .cell rect { stroke: #e8e8e8; stroke-width: .5; }
-/* A counted square's fill is a presentation attribute, which this rule would
-   override, so it only reaches squares without one. */
-.viz.mtx .cell.off rect { fill: var(--bg); }
-.viz.mtx .cell.sil rect { fill: var(--sil-cell); }
+.viz.mtx .c-off { fill: var(--bg); }
 .viz.mtx a:hover .cell rect, .viz.mtx a:focus .cell rect { stroke: var(--fg); stroke-width: 1.5; }
 .viz.mtx .cell.on rect { stroke: var(--select); stroke-width: 2.5; }
 .viz.mtx .sep { stroke: #999; stroke-width: 1; }
@@ -143,8 +166,7 @@ th.desc a::after { content: " \2193"; }
 .key li { display: flex; align-items: center; gap: 6px; }
 .key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
 .key i.c-none { box-shadow: inset 0 0 0 1px #ccc; }
-.key i.hl { background: var(--select); }
+.key .note { color: var(--muted); font-style: italic; }
 .key li.off { visibility: hidden; }
-/* The matrix's one legend entry: a gradient between its two end counts, sized to
-   sit on the caption's line rather than to be read off. */
-.key.ramp .bar { width: 120px; height: 11px; display: inline-block; }
+/* The matrix's count scale: the opacity steps its squares use, in ink. */
+.key .steps svg { fill: var(--fg); }

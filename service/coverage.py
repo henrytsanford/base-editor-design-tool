@@ -14,10 +14,11 @@ down, resulting residue across, grouped by chemical class. A filled square means
 editor can make that change somewhere in this transcript. Which squares fill is a
 property of the genetic code and the editor rather than of the gene, so the same
 editor fills the same squares in every transcript; only the counts and the positions
-differ, which is what the map beside it shows.
+differ, which is what the map above it shows.
 
-Both panels hand back plain data. The SVG itself is written in `_coverage.html`, so
-the markup lives with the other markup and what is tested here is arithmetic.
+Both panels hand back plain data. The SVG itself is written in `_gene_map.html` and
+`_matrix.html`, so the markup lives with the other markup and what is tested here is
+arithmetic.
 """
 import re
 from collections import defaultdict
@@ -35,12 +36,13 @@ from .results import (AA_COLUMN, MUTATION_COLUMN, POSITION_COLUMN, SIGNIFICANCE_
 BINS = 300
 
 # Drawing geometry, in the SVG's own user units. The template scales it to whatever
-# width the page gives it.
+# width the page gives it; the map spans the page, so it is kept flat.
 WIDTH = 1000
-HEIGHT = 230
+HEIGHT = 150
 MARGIN = 10           # either side of the gene map
-MIDLINE = 118
-BAR_MAX = 78          # tallest a bin's stack may be drawn
+MIDLINE = 75
+BAR_MAX = 46          # tallest a bin's stack may be drawn
+TRACK = 13            # from the midline to where each strand's stacks start
 CDS_HEIGHT = 16       # a coding exon block
 UTR_HEIGHT = 8        # an untranslated one, drawn thinner the way a gene model is
 LABEL_GAP = 22        # how far apart exon numbers must be to both be drawn
@@ -86,27 +88,36 @@ RESIDUES = tuple(aa for _, group in RESIDUE_GROUPS for aa in group)
 RESIDUE_INDEX = {aa: i for i, aa in enumerate(RESIDUES)}
 ONE_LETTER = dict(get_aa_map(), Ter='Stop')
 
-# Matrix geometry. The square is inherently taller than the wide, flat gene map
-# beside it, so the cell is kept small enough that the two panels balance.
+# Matrix geometry. Every label sits left of or below the grid, so the top margin is
+# only enough to keep the frame's stroke inside the drawing.
 CELL = 18
 MATRIX_LEFT = 104
-MATRIX_TOP = 52
-# Count on the matrix, one hue light to dark. A square's fill is interpolated along
-# these stops, and the legend draws the same stops as a gradient, so the two agree.
-# Deliberately not one of the map's consequence hues: it encodes how many, not what.
-RAMP = ('#cde2fb', '#86b6ef', '#3987e5', '#184f95')
+MATRIX_TOP = 6
+# A square is coloured by what the change does, in the map's consequence hues, so one
+# colour means one thing on both charts. How many guides make it is the fill's
+# opacity, from MIN_OPACITY for the fewest to solid for the most: the palest square
+# still has to read as filled beside an empty one.
+MIN_OPACITY = 0.25
+# How many steps the legend draws between the two ends of the opacity scale.
+LEGEND_STEPS = 5
 
 
-def ramp_colour(fraction):
-    """The colour at `fraction` (0 to 1) along RAMP."""
+def square_class(source, target):
+    """The consequence class of changing `source` to `target`, as the map names it."""
+    if source == target:
+        return 'sil'
+    return 'lof' if target == 'Ter' else 'mis'
+
+
+def plural(count, word):
+    """'1 guide', '2 guides'."""
+    return '%d %s%s' % (count, word, '' if count == 1 else 's')
+
+
+def opacity(fraction):
+    """The fill opacity at `fraction` (0 to 1) along the count scale."""
     fraction = min(1.0, max(0.0, fraction))
-    span = fraction * (len(RAMP) - 1)
-    index = min(int(span), len(RAMP) - 2)
-    local = span - index
-    low, high = RAMP[index], RAMP[index + 1]
-    channels = (round(int(low[i:i + 2], 16) * (1 - local) + int(high[i:i + 2], 16) * local)
-                for i in (1, 3, 5))
-    return '#%02x%02x%02x' % tuple(channels)
+    return round(MIN_OPACITY + (1 - MIN_OPACITY) * fraction, 3)
 
 # A substitution as a URL says it: 'Glu-Gly'. Both halves must name a residue, which
 # is what stops the parameter reaching anything but a dictionary lookup.
@@ -280,8 +291,12 @@ class Coverage(object):
         for category, mask in category_masks.items():
             rank = CLASS_RANK[CATEGORY_CLASS.get(category, 'nc')]
             worst[mask] = np.minimum(worst[mask], rank)
+        # Kept per row so a selected substitution's guides can be lifted out of the
+        # stacks they were counted into.
+        self._row_sides = (~senses).astype(np.int32)
+        self._row_classes = worst
         # Counts per (bin, strand side, class), sense above the line as side 0.
-        cell = ((self._row_bins * 2 + (~senses).astype(np.int32)) * len(CLASSES)
+        cell = ((self._row_bins * 2 + self._row_sides) * len(CLASSES)
                 + worst)[drawable]
         self._bins = np.bincount(cell, minlength=BINS * 2 * len(CLASSES)).reshape(
             BINS, 2, len(CLASSES))
@@ -332,7 +347,15 @@ class Coverage(object):
     # ---- what the template draws ---------------------------------------------
 
     def map_view(self, selected_exon=0, selected_substitution=''):
-        """The gene map: exon blocks, binned guide stacks, and any highlight."""
+        """The gene map: exon blocks and binned guide stacks.
+
+        With a substitution selected, the guides making it are drawn as their own
+        segment next to the track, in the colour of the square that was clicked, and
+        every other segment is marked `dim`. They take the square's colour rather
+        than their own because a guide is otherwise drawn as its worst edit: one
+        making a silent change beside a missense one would light up blue when the
+        green square was clicked. A bin holding none of them is marked `dim` whole.
+        """
         geometry = self.geometry
         scale = (WIDTH - 2 * MARGIN) / geometry.width
         bin_width = (WIDTH - 2 * MARGIN) / BINS
@@ -352,8 +375,7 @@ class Coverage(object):
             # The number sits on the coding part when there is one: white on the
             # thin UTR block it would be cut off or unreadable.
             coding_pieces = [piece for piece in pieces if piece[2]]
-            coding = bool(coding_pieces)
-            if coding:
+            if coding_pieces:
                 first, last = coding_pieces[0][0], coding_pieces[-1][1]
             else:
                 first, last = low, high
@@ -368,11 +390,25 @@ class Coverage(object):
                 'label': label,
                 'label_x': round(centre, 2),
                 'selected': selected_exon == index + 1,
-                'title': 'Exon %d · %d bp%s · %d guide%s' % (
-                    index + 1, high - low + 1, '' if coding else ' (untranslated)',
-                    count, '' if count == 1 else 's'),
+                'title': 'Exon %d · %d bp%s · %s' % (
+                    index + 1, high - low + 1,
+                    '' if coding_pieces else ' (untranslated)',
+                    plural(count, 'guide')),
             })
 
+        # The selected guides per (bin, side), and the same guides per (bin, side,
+        # class) so they can be taken out of the counts they were stacked under.
+        picked = removed = None
+        if selected_substitution in self._substitution_rows:
+            rows = self._substitution_rows[selected_substitution]
+            picked_class = square_class(*selected_substitution.split('-'))
+            picked_letters = self.selection(selected_substitution)['letters']
+            where = (self._row_bins[rows], self._row_sides[rows])
+            picked = np.zeros((BINS, 2), dtype=np.int64)
+            np.add.at(picked, where, 1)
+            removed = np.zeros_like(self._bins)
+            np.add.at(removed, where + (self._row_classes[rows],), 1)
+        bar_width = round(max(0.6, bin_width - 0.6), 2)
         bins = []
         for index, sides in enumerate(self._bins.tolist()):
             both = [up + down for up, down in zip(*sides)]
@@ -380,68 +416,74 @@ class Coverage(object):
             if not total:
                 continue
             x = MARGIN + index * bin_width
+            bar_x = round(x + 0.3, 2)
             segments = []
             for side, counts in enumerate(sides):
-                edge = MIDLINE - 13 if side == 0 else MIDLINE + 13
-                for name, value in zip(CLASSES, counts):
+                if picked is None:
+                    stack = [(name, value, False) for name, value in zip(CLASSES, counts)]
+                else:
+                    stack = [(picked_class, int(picked[index, side]), False)] + [
+                        (name, value - int(removed[index, side, rank]), True)
+                        for rank, (name, value) in enumerate(zip(CLASSES, counts))]
+                edge = MIDLINE - TRACK if side == 0 else MIDLINE + TRACK
+                for name, value, faded in stack:
                     if not value:
                         continue
                     height = value / self.peak * BAR_MAX
                     y = edge - height if side == 0 else edge
-                    segments.append({'x': round(x + 0.3, 2),
-                                     'y': round(y, 2),
-                                     'width': round(max(0.6, bin_width - 0.6), 2),
+                    segments.append({'y': round(y, 2),
                                      'height': round(height, 2),
-                                     'cls': name})
+                                     'cls': name,
+                                     'dim': faded})
                     edge = edge - height if side == 0 else edge + height
+            hits = int(picked[index].sum()) if picked is not None else 0
             bins.append({
                 'x': round(x, 2),
-                'width': round(bin_width, 2),
+                'bar_x': bar_x,
                 'segments': segments,
-                'title': '%d guide%s: %s' % (
-                    total, '' if total == 1 else 's',
+                'dim': picked is not None and not hits,
+                'title': '%s: %s%s' % (
+                    plural(total, 'guide'),
                     ', '.join('%d %s' % (n, CLASS_LABELS[c])
-                              for c, n in zip(CLASSES, both) if n)),
+                              for c, n in zip(CLASSES, both) if n),
+                    ' · %d make %s' % (hits, picked_letters) if hits else ''),
             })
 
-        highlight = []
-        if selected_substitution in self._substitution_rows:
-            rows = self._substitution_rows[selected_substitution]
-            for index in np.unique(self._row_bins[rows]):
-                highlight.append({'x': round(MARGIN + index * bin_width, 2),
-                                  'width': round(max(1.4, bin_width - 0.6), 2)})
         counts = [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
                   for name, count in self.class_counts.items() if count]
-        return {'exons': exons, 'bins': bins, 'highlight': highlight,
+        return {'exons': exons, 'bins': bins,
                 'width': WIDTH, 'height': HEIGHT,
-                'midline': MIDLINE, 'margin': MARGIN, 'counts': counts,
-                'total': self.total}
+                'bin_width': round(bin_width, 2), 'bar_width': bar_width,
+                # The band the stacks can occupy: the hover targets span exactly
+                # this, whatever the drawing's height.
+                'band_top': MIDLINE - TRACK - BAR_MAX,
+                'band_height': 2 * (TRACK + BAR_MAX),
+                'midline': MIDLINE, 'margin': MARGIN, 'counts': counts}
 
     def matrix_view(self, selected=''):
         """The substitution matrix: 441 squares, whatever the gene."""
-        # The scale spans the squares it shades: silent ones are drawn grey, so a
-        # large synonymous count does not wash out the rest.
+        # The scale spans the squares that change the residue. Silent ones sit on it
+        # too but are left out of its range, so a large synonymous count does not
+        # wash out the rest; past the top they are simply drawn solid.
         shaded = [count for key, count in self.matrix_counts.items()
-                  if len(set(key.split('-'))) == 2]
+                  if square_class(*key.split('-')) != 'sil']
         low, high = min(shaded + [1]), max(shaded + [1])
-        cells = []
+        cells, present = [], set()
         for down, source in enumerate(RESIDUES):
             for across, target in enumerate(RESIDUES):
                 key = substitution_key(source, target)
                 count = self.matrix_counts.get(key, 0)
-                fill = None
+                shade = None
                 if count:
-                    if source == target:
-                        cls = 'sil'
-                    else:
-                        cls = 'fill'
-                        fill = ramp_colour((count - low) / float(high - low)
-                                           if high > low else 1.0)
+                    cls = square_class(source, target)
+                    present.add(cls)
+                    shade = opacity((count - low) / float(high - low)
+                                    if high > low else 1.0)
                     sites = self.matrix_sites[key]
                     pathogenic = self.matrix_pathogenic.get(key, 0)
-                    title = '%s to %s · %d guide%s at %d site%s%s' % (
-                        ONE_LETTER[source], ONE_LETTER[target], count,
-                        '' if count == 1 else 's', sites, '' if sites == 1 else 's',
+                    title = '%s to %s · %s at %s%s' % (
+                        ONE_LETTER[source], ONE_LETTER[target],
+                        plural(count, 'guide'), plural(sites, 'site'),
                         ' · %d recreate a pathogenic variant' % pathogenic
                         if pathogenic else '')
                 else:
@@ -453,7 +495,7 @@ class Coverage(object):
                     'y': MATRIX_TOP + down * CELL,
                     'count': count,
                     'cls': cls,
-                    'fill': fill,
+                    'opacity': shade,
                     'selected': selected == key,
                     'title': title,
                 })
@@ -474,8 +516,12 @@ class Coverage(object):
             'cells': cells, 'rules': rules, 'labels': labels, 'groups': groups,
             'left': MATRIX_LEFT, 'top': MATRIX_TOP, 'cell': CELL, 'size': size,
             'width': MATRIX_LEFT + size + 14, 'height': MATRIX_TOP + size + 72,
-            'ramp': [{'offset': round(i / float(len(RAMP) - 1), 3), 'colour': colour}
-                     for i, colour in enumerate(RAMP)],
+            # The legend: the classes this result fills, in the map's order and
+            # words, and the opacity scale as a row of steps.
+            'classes': [{'cls': name, 'label': CLASS_LABELS[name]}
+                        for name in CLASSES if name in present],
+            'steps': [opacity(i / float(LEGEND_STEPS - 1))
+                      for i in range(LEGEND_STEPS)],
             'low': low, 'high': high, 'shaded': bool(shaded),
         }
 
@@ -512,7 +558,6 @@ class Coverage(object):
         source, target = key.split('-')
         return {
             'letters': '%s → %s' % (ONE_LETTER[source], ONE_LETTER[target]),
-            'guides': self.matrix_counts[key],
             'sites': self.matrix_sites[key],
             'pathogenic': self.matrix_pathogenic.get(key, 0),
             'silent': source == target,

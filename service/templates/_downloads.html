@@ -1,12 +1,31 @@
 {# The result files, with what each one holds. Its own file so the table page
-   and the download-only page list them the same way. #}
+   and the download-only page list them the same way. Most visitors come for the
+   designs file and nothing else, so it is the one button; the other two are there
+   for whoever needs them.
+
+   `compact` is the table page's form: one block beside the heading, so the charts
+   and the table start near the top, with each file's description on hover. The
+   download-only page has nothing else to show, so it writes them out. #}
+{% set filename, url, description = downloads[0] %}
+{% if compact %}
+<section class="download-bar" aria-label="Download the full result">
+  <a class="button download" href="{{ url }}" title="{{ description }}">Download {{ filename }}</a>
+  <p class="also">
+  {% for filename, url, description in downloads[1:] %}<a href="{{ url }}" title="{{ description }}">{{ filename }}</a>{{ ' &middot; '|safe if not loop.last else '' }}{% endfor %}
+  <br>Always the complete result, not the filtered view.</p>
+</section>
+{% else %}
 <section class="downloads">
 <h2>Download the full result</h2>
-<ul>
-{% for filename, url, description in downloads %}
+<div class="primary">
+  <a class="button download" href="{{ url }}">Download {{ filename }}</a>
+  <p>{{ description }} A gzipped table: always the complete result, not the
+  filtered view.</p>
+</div>
+<ul class="also">
+{% for filename, url, description in downloads[1:] %}
 <li><a href="{{ url }}">{{ filename }}</a> <span class="muted">&mdash; {{ description }}</span></li>
 {% endfor %}
 </ul>
-<p class="muted">Each file is a gzipped table. Always the complete result, not the filtered
-view.</p>
 </section>
+{% endif %}

@@ -495,8 +495,9 @@ def test_clicking_a_square_filters_and_marks_the_map(client):
     filtered = client.get(url)
     assert filtered.status_code == 200
     assert _matched(filtered.text)[0] == promised
-    # and those guides are marked on the map beside it
-    assert 'class="hl"' in filtered.text
+    # and the map above it fades every bin without one of those guides
+    assert 'class="bin dim"' in filtered.text
+    assert 'class="bin"' in filtered.text
 
 
 def test_a_substitution_this_editor_cannot_make_is_a_400(client):

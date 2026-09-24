@@ -125,6 +125,34 @@ def test_splice_edits_stay_out_of_the_matrix():
     assert not table.matrix_counts
 
 
+def test_a_selected_substitution_fades_the_bins_without_it():
+    """Exon 1's bin holds the Glu-Gly guide and keeps its colour; exon 2's does not."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+        ['380', 'sense', 'Missense', 'Lys40Arg', 'None'],
+    ]), PLUS)
+    assert [b['dim'] for b in table.map_view(selected_substitution='Glu-Gly')['bins']] \
+        == [False, True]
+    assert not any(b['dim'] for b in table.map_view()['bins'])
+
+
+def test_a_selected_substitution_lights_only_its_own_guides():
+    """In a bin shared with other guides only the selected ones stay lit, drawn in
+    the square's colour: this guide's worst edit is missense, but it was picked
+    from the silent square, so it lights green."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense;Silent', 'Glu27Gly;Leu28Leu', 'None;None'],
+        ['160', 'sense', 'Missense', 'Lys40Arg', 'None'],
+    ]), PLUS)
+    [bin_] = table.map_view(selected_substitution='Leu-Leu')['bins']
+    lit = [(seg['cls'], seg['height']) for seg in bin_['segments'] if not seg['dim']]
+    faded = [seg['cls'] for seg in bin_['segments'] if seg['dim']]
+    assert [cls for cls, _ in lit] == ['sil'] and faded == ['mis']
+    # the two halves still stack to the bin's full height
+    assert sum(seg['height'] for seg in bin_['segments']) == coverage.BAR_MAX
+    assert not bin_['dim']
+
+
 def test_the_matrix_counts_pathogenic_recreations():
     table = coverage.Coverage(frame([
         ['160', 'sense', 'Missense', 'Glu27Gly', 'Pathogenic'],
@@ -152,13 +180,27 @@ def test_the_matrix_is_always_the_same_size():
 
 
 def test_matrix_shading_spans_the_counts():
-    """The fewest guides get the ramp's first colour and the most its last."""
+    """The fewest guides get the palest fill and the most a solid one."""
     rows = ([['160', 'sense', 'Missense', 'Glu27Gly', 'None']] * 3
             + [['320', 'sense', 'Missense', 'Lys40Arg', 'None']])
     view = coverage.Coverage(frame(rows), PLUS).matrix_view()
-    fills = {cell['key']: cell['fill'] for cell in view['cells'] if cell['fill']}
-    assert fills == {'Glu-Gly': coverage.RAMP[-1], 'Lys-Arg': coverage.RAMP[0]}
+    shades = {cell['key']: cell['opacity'] for cell in view['cells'] if cell['count']}
+    assert shades == {'Glu-Gly': 1.0, 'Lys-Arg': coverage.MIN_OPACITY}
     assert (view['low'], view['high']) == (1, 3)
+    assert view['steps'][0] == coverage.MIN_OPACITY and view['steps'][-1] == 1.0
+
+
+def test_matrix_squares_take_the_map_consequence_colours():
+    """A stop is loss of function and the diagonal silent, as on the map, and the
+    legend lists only the classes the result fills."""
+    rows = [['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+            ['170', 'sense', 'Nonsense', 'Gln28Ter', 'None'],
+            ['180', 'sense', 'Silent', 'Leu29Leu', 'None']]
+    view = coverage.Coverage(frame(rows), PLUS).matrix_view()
+    classes = {cell['key']: cell['cls'] for cell in view['cells'] if cell['count']}
+    assert classes == {'Glu-Gly': 'mis', 'Gln-Ter': 'lof', 'Leu-Leu': 'sil'}
+    assert [entry['cls'] for entry in view['classes']] == ['lof', 'mis', 'sil']
+    assert all(cell['cls'] == 'off' for cell in view['cells'] if not cell['count'])
 
 
 def test_exon_mask_picks_out_one_exon():
