@@ -362,7 +362,10 @@ def create_app(settings=None):
         # than adding to it, so two clicks on the chart cannot build a filter that
         # matches nothing.
         map_view = matrix_view = selection = None
+        exon_options = sub_options = ()
         if table.coverage is not None:
+            exon_options = table.coverage.exon_options(view.exon)
+            sub_options = table.coverage.substitution_options()
             map_view = table.coverage.map_view(view.exon, view.sub)
             matrix_view = table.coverage.matrix_view(view.sub)
             for exon in map_view['exons']:
@@ -380,17 +383,14 @@ def create_app(settings=None):
             params=params,
             view=view, columns=columns, result=result,
             map=map_view, matrix=matrix_view, selection=selection,
-            # One per panel: each sits in the caption of the panel it undoes, so a
-            # link that cleared both would not match the sentence beside it.
-            clear_exon_url=designs_url(exon=None),
-            clear_sub_url=designs_url(sub=None),
+            exon_options=exon_options, sub_options=sub_options,
             total=manifest.get('designs', table.total), facets=table.facets(),
             any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
             clear_url=build_url('/designs', values, DESIGN_PARAMS),
-            # The filter form carries the chart's selection through, so applying a
-            # filter narrows what was clicked instead of discarding it.
+            # The chart's selection is not among these: it has its own two fields in
+            # the form, so applying a filter narrows what was clicked.
             hidden=[(name, values[name])
-                    for name in DESIGN_PARAMS + ('sort', 'dir', 'exon', 'sub')
+                    for name in DESIGN_PARAMS + ('sort', 'dir')
                     if values.get(name)],
             downloads=_downloads(values))
 

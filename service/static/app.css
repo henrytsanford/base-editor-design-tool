@@ -39,8 +39,15 @@ input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--line);
 input[type=number] { width: 8em; }
 #q, #pam, #window { width: 100%; max-width: 260px; }
 select { max-width: 340px; }
-button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0; border-radius: 4px;
-         background: var(--accent); color: #fff; cursor: pointer; }
+button, a.button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0;
+                   border-radius: 4px; background: var(--accent); color: #fff;
+                   cursor: pointer; display: inline-block; line-height: 1.5;
+                   text-decoration: none; }
+/* The same shape as the primary button, outlined so it reads as the lesser action.
+   The inset shadow stands in for a border, so both are the same size. */
+a.button.secondary { background: var(--bg); color: var(--accent);
+                     box-shadow: inset 0 0 0 1px var(--accent); }
+a.button.secondary:hover { background: #f3fbf6; }
 details.advanced { margin: 4px 0 14px; }
 details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
@@ -133,11 +140,7 @@ th.desc a::after { content: " \2193"; }
 .key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
 .key i.c-none { box-shadow: inset 0 0 0 1px #ccc; }
 .key i.hl { background: var(--accent); }
+.key li.off { visibility: hidden; }
 /* The matrix's one legend entry: a gradient between its two end counts, sized to
    sit on the caption's line rather than to be read off. */
 .key.ramp .bar { width: 120px; height: 11px; display: inline-block; }
-
-/* Stands in for a panel's caption text while something on it is selected, so it
-   takes that text's size and rhythm rather than a banner's. */
-.picked { font-size: 13px; background: #f3fbf6; border: 1px solid #cfe9db;
-          border-radius: 4px; padding: 6px 10px; margin: 0 0 8px; }

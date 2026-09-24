@@ -141,6 +141,31 @@ def test_exon_mask_picks_out_one_exon():
     assert not table.has_exon(3)
 
 
+def test_the_form_offers_only_exons_with_guides():
+    """Unless a link already selected the empty one: the form must still show it."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+        ['170', 'sense', 'Missense', 'Lys40Arg', 'None'],
+    ]), PLUS)
+    assert table.exon_options() == [(1, 2)]
+    assert table.exon_options(selected=2) == [(1, 2), (2, 0)]
+
+
+def test_the_form_offers_the_squares_the_matrix_links_in_its_order():
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+        ['170', 'sense', 'Missense;Nonsense', 'Lys40Arg;Glu41Ter', 'None;None'],
+        ['180', 'sense', 'Missense', 'Lys42Arg', 'None'],
+    ]), PLUS)
+    options = table.substitution_options()
+    # Lys before Glu: the matrix groups positive residues first.
+    assert [group for group, _ in options] == ['Lys (K)', 'Glu (E)']
+    assert options[0][1] == [('Lys-Arg', '→ Arg (R) · 2')]
+    assert options[1][1] == [('Glu-Gly', '→ Gly (G) · 1'), ('Glu-Ter', '→ Stop · 1')]
+    keys = [key for _, group in options for key, _ in group]
+    assert sorted(keys) == sorted(table.matrix_counts)
+
+
 def test_substitution_parsing_is_case_insensitive_and_bounded():
     assert coverage.parse_substitution('Glu-Gly') == ('Glu', 'Gly')
     assert coverage.parse_substitution('Xyz-Gly') is None

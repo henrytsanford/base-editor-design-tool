@@ -7,17 +7,12 @@
   <figure class="panel map">
     <figcaption>
       <h2>Guide coverage</h2>
-      {# What is selected takes the caption's place, so the sentence about the
-         selection sits next to the drawing it was made on. #}
-      {% if view.exon %}
-      <p class="picked">Showing exon {{ view.exon }} only.
-      <a href="{{ clear_exon_url }}">Show every exon</a></p>
-      {% else %}
-      {# Only what the drawing cannot say for itself: the strands are labelled on the
+      {# The captions read the same whatever is selected, so selecting never moves
+         the drawing under the pointer. The selection is said in the filter form.
+         Only what the drawing cannot say for itself: the strands are labelled on the
          SVG, and the shortening is the one thing a reader would otherwise misread. #}
       <p class="muted">Introns shortened to the {{ params.intron_buffer }} bp either side a
-      guide can reach. Click an exon to filter.</p>
-      {% endif %}
+      guide can reach. Click an exon to filter the table.</p>
       {# The legend carries each class's count, so the colours and the tally are one
          thing to read rather than the same five labels written out twice. Only the
          classes this result contains are listed; a zero has nothing to point at. #}
@@ -26,7 +21,9 @@
         {% for entry in map.counts %}
         <li><i class="c-{{ entry.cls }}"></i>{{ '{:,}'.format(entry.count) }} {{ entry.label }}</li>
         {% endfor %}
-        {% if view.sub %}<li><i class="hl"></i>selected change</li>{% endif %}
+        {# Always laid out, only hidden, so the key cannot wrap onto a new line
+           and push the map down when a square is picked. #}
+        <li{% if not view.sub %} class="off" aria-hidden="true"{% endif %}><i class="hl"></i>selected change</li>
       </ul>
     </figcaption>
     <svg class="viz gene" viewBox="0 0 {{ map.width }} {{ map.height }}" role="img"
@@ -65,18 +62,7 @@
   <figure class="panel matrix">
     <figcaption>
       <h2>Possible residue changes</h2>
-      {% if selection %}
-      <p class="picked">Showing the <b>{{ selection.letters }}</b> guides:
-      {{ selection.guides }} guide{{ '' if selection.guides == 1 else 's' }} at
-      {{ selection.sites }} site{{ '' if selection.sites == 1 else 's' }}{% if selection.pathogenic %},
-      {{ selection.pathogenic }} recreating a pathogenic variant{% endif %}{% if selection.silent %} &mdash;
-      silent, so the protein does not change{% endif %}.
-      <a href="{{ clear_sub_url }}">Show every change</a></p>
-      {% else %}
-      {# The axis titles already name the two residues, so the caption is the
-         affordance alone. #}
       <p class="muted">Click a square to filter the table and mark those guides on the map.</p>
-      {% endif %}
       {# One encoding, so one legend entry. A grey square is on the diagonal, where
          the two residues are the same, and an empty one is empty. #}
       <ul class="key ramp">

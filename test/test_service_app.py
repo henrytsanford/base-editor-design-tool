@@ -479,7 +479,8 @@ def test_clicking_an_exon_filters_the_table_to_it(client):
     assert filtered.status_code == 200
     matched, total = _matched(filtered.text)
     assert 0 < matched < total
-    assert 'Showing exon 2 only' in filtered.text
+    # The selection is read in the filter form, next to the other filters.
+    assert re.search(r'<option value="2" selected>Exon 2 \(\d+\)</option>', filtered.text)
 
 
 def test_clicking_a_square_filters_and_marks_the_map(client):
@@ -516,4 +517,32 @@ def test_the_filter_form_keeps_the_chart_selection(client):
     """Applying a filter narrows what was clicked instead of discarding it."""
     wait_for_table(client, DESIGNS_URL)
     response = client.get(DESIGNS_URL + '&exon=2')
-    assert '<input type="hidden" name="exon" value="2">' in response.text
+    form = response.text[response.text.index('class="filters"'):
+                         response.text.index('</form>')]
+    assert '<select id="exon" name="exon">' in form
+    assert '<option value="2" selected>' in form
+
+
+def test_selecting_on_a_chart_leaves_its_caption_alone(client):
+    """A selection that rewrote the caption would move the drawing under it."""
+    def captions(text):
+        return re.findall(r'<figcaption>.*?</figcaption>', text,
+                          re.S)
+
+    response = wait_for_table(client, DESIGNS_URL)
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    for query in ('&exon=2', '&sub=' + sub):
+        selected = client.get(DESIGNS_URL + query)
+        # The map's key differs only in the one entry kept hidden but laid out.
+        assert (captions(selected.text.replace(' class="off" aria-hidden="true"', ''))
+                == captions(response.text.replace(' class="off" aria-hidden="true"', '')))
+    assert re.search(r'change is made at \d+\s+site', selected.text)
+
+
+def test_the_form_lists_every_square_the_matrix_links(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    linked = set(re.findall(r'href="/designs\?[^"]*sub=([A-Za-z]{3}-[A-Za-z]{3})',
+                            response.text))
+    select = response.text[response.text.index('<select id="sub"'):]
+    select = select[:select.index('</select>')]
+    assert set(re.findall(r'<option value="([A-Za-z]{3}-[A-Za-z]{3})"', select)) == linked
