@@ -35,7 +35,7 @@ gigabyte of downloads.
 ## Running
 
     docker run --rm -p 8000:8000 \
-        -e MAX_JOBS=2 -e JOB_TIMEOUT=120 \
+        -e MAX_JOBS=2 -e JOB_TIMEOUT=120 -e MCP_WAIT=20 \
         bedesign:$TAG
 
     curl -s localhost:8000/healthz
@@ -43,6 +43,19 @@ gigabyte of downloads.
 
 The first `/designs` call starts a job and returns the running page; the second, a few
 seconds later, returns the table.
+
+The same service answers MCP over HTTP at `/api/mcp` -- `healthz` reports `"mcp": true`
+when the stack is installed. No trailing slash: Starlette 307s `/api/mcp/` onto it.
+
+    curl -si -X POST localhost:8000/api/mcp \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+Reading a failure there: **421** means the transport's DNS-rebinding protection is on
+and refusing the Host header (it auto-enables unless `host` is set to something
+non-localhost); **500 "Task group is not initialized"** means the mounted app's
+lifespan was not entered; **307** means the slash.
 
 `service/config.py` is the schema for the settings and carries the defaults.
 `TRUSTED_PROXY_HOPS` is the number of proxies in front that append to
@@ -85,6 +98,20 @@ What those limits need in order to hold on Cloud Run:
   viewed results after each job.
 - **Survive a dead worker.** Done: a worker killed outright no longer leaves the pool
   unusable; it is replaced, and `/healthz` reports the crash (see "Watching it").
+
+The MCP endpoint at `/api/mcp` is public on the same terms and shares those limits
+rather than having its own: the same token bucket per address, the same two-worker pool,
+the same per-job cap. Two consequences worth knowing before they are discovered. A busy
+MCP caller can make the browser show the busy page, and the knob for that is
+`RATE_BURST`. And `MCP_WAIT` (default 20 s) is how long a `design_guides` call waits for
+a free worker before telling the model to call again -- so Cloud Run's `--timeout` must
+exceed `MCP_WAIT + JOB_TIMEOUT`, or a design is cut off mid-wait.
+
+`TRUSTED_PROXY_HOPS` can be right for only one entry path: Firebase Hosting adds a hop
+that the `run.app` URL does not. Every wrong value collapses the limiter into a single
+bucket for everybody rather than failing loudly, so verify it rather than reasoning
+about it -- `/healthz` logs `host=`, `forwarded=` and `charging=`, and `charging=` must
+differ between two requests from two different networks.
 
 Set a billing budget alert. A new deploy is opened to the public with:
 

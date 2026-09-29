@@ -57,6 +57,11 @@ class Settings:
     # Size budget for RESULTS_DIR, which is in memory on Cloud Run. Past it, the
     # least recently viewed results are deleted after each job (storage.evict).
     results_max_mb: int = 1024
+    # How long an MCP design_guides call waits for a free worker before telling the
+    # model to call again. A browser retries by itself through busy.html; a model
+    # would have to spend a turn deciding to, and a tool call is already the model
+    # waiting. Bounded so the call cannot outlive the request timeout in front of it.
+    mcp_wait: int = 20
     # How many proxies in front append to X-Forwarded-For. 0, the default, ignores
     # the header: with nothing in front, any client can set it. Cloud Run alone is 1.
     # See ratelimit.client_ip.
@@ -92,6 +97,7 @@ class Settings:
                                         0, 10000000),
             results_max_mb=_bounded_int(env, 'RESULTS_MAX_MB', cls.results_max_mb,
                                         1, 1000000),
+            mcp_wait=_bounded_int(env, 'MCP_WAIT', cls.mcp_wait, 0, 300),
             trusted_proxy_hops=_bounded_int(env, 'TRUSTED_PROXY_HOPS',
                                             cls.trusted_proxy_hops, 0, MAX_PROXY_HOPS),
         )

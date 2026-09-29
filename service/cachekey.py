@@ -21,6 +21,51 @@ MANIFEST = 'manifest.json'
 RESULTS = 'results'
 
 
+@dataclasses.dataclass(frozen=True)
+class Target:
+    """What a run designs over: a transcript, or a sequence given inline.
+
+    Cache-key vocabulary, which is why it lives here: `key` is the part of the digest
+    that says what was designed, and `files` names keys of RESULT_FILES. Both front
+    doors and the pool worker need it, and this is the module below all of them --
+    a Target travels to a worker process by pickle, so it must import cleanly there.
+    """
+    kind: str
+    transcript_id: str = ''
+    name: str = ''
+    sequence: str = ''
+
+    @property
+    def label(self):
+        """What the output files are named after, as the CLI names them."""
+        return self.transcript_id if self.kind == 'transcript' else self.name
+
+    @property
+    def key(self):
+        """The part of the cache key that says what was designed.
+
+        A transcript is its own ID, so every key computed before sequences existed is
+        unchanged. A sequence is keyed by its digest rather than by itself: the key is
+        canonical JSON that gets hashed anyway, and a 100 kb sequence has no business
+        being built into a string first.
+        """
+        if self.kind == 'transcript':
+            return self.transcript_id
+        digest = hashlib.sha256(
+            ('%s\n%s' % (self.name, self.sequence)).encode('utf-8')).hexdigest()
+        return 'seq:%s' % digest
+
+    @property
+    def files(self):
+        """Which of the three files this kind of run writes.
+
+        Nucleotide input has no gene to look up, so it never annotates -- the CLI does
+        not create the file at all, and neither does this.
+        """
+        return ('designs', 'errors', 'clinvar') if self.kind == 'transcript' \
+            else ('designs', 'errors')
+
+
 def key_fields(transcript_id, params, ensembl_release, clinvar_version, engine_version):
     """Ordering is handled by sort_keys.
 

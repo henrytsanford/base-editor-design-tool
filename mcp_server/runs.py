@@ -7,63 +7,45 @@ parameters, which makes an identical second request free and means a handle can 
 name a result computed under parameters the caller has forgotten.
 
 The web service writes into this same store, under this same key, so a transcript
-designed there and designed here are one object. Its manifest is the smaller, older
-shape; `_manifest` fills in what it does not carry rather than failing on a key while
-the result sits on disk.
+designed there and designed here are one object. What each writer records differs a
+little, so `_filled` supplies the rest on read rather than failing on a key while the
+result sits on disk.
 """
 import contextlib
 import csv
 import dataclasses
 import gzip
-import hashlib
 import io
 import json
 import logging
 import threading
 import time
 
-from bedesign import (ANNOTATION_COLUMNS, ANNOTATIONS_FILE, DESIGN_COLUMNS,
-                      DESIGNS_FILE, ENGINE_VERSION, ERROR_COLUMNS, ERRORS_FILE,
-                      design_sequence, design_transcript, tsv)
+from bedesign import (ANNOTATIONS_FILE, DESIGNS_FILE, ENGINE_VERSION, ERRORS_FILE,
+                      tsv)
 from bedesign.transcript_source import ClinVarSource, LocalSource
 
 from service.cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key,
                               manifest_key, result_key)
+from service.jobs import COLUMNS, design_target, file_stats
 from service.results import ResultCache
 from service.storage import LocalStorage
 from service.tables import load_table
 
 log = logging.getLogger(__name__)
 
-# The three outputs a run writes: the columns each holds, and the name the CLI would
-# have given the file. One table, because the same three names are otherwise spelled
-# out wherever a file is written, validated, exported or named.
-OUTPUTS = {
-    'designs': (DESIGN_COLUMNS, DESIGNS_FILE),
-    'errors': (ERROR_COLUMNS, ERRORS_FILE),
-    'clinvar': (ANNOTATION_COLUMNS, ANNOTATIONS_FILE),
-}
+# What the CLI would have called each output. The columns each holds live beside the
+# worker that writes them, in service.jobs.COLUMNS.
+FILENAMES = {'designs': DESIGNS_FILE, 'errors': ERRORS_FILE,
+             'clinvar': ANNOTATIONS_FILE}
 # The storage layer owns the same vocabulary; a name here that it does not know would
 # be a file nothing could ever read back.
-assert set(OUTPUTS) == set(RESULT_FILES), 'output names disagree with storage'
-
-
-def _file_stats(raw):
-    """A written file's size, line count and digest.
-
-    Measured over the text form -- the bytes `export_run` hands back -- rather than
-    the stored gzip, so the figures describe the same content whichever encoding a
-    caller asks for.
-    """
-    text = tsv.as_text(raw)
-    encoded = text.encode('utf-8')
-    return {'bytes': len(encoded), 'lines': text.count('\n'),
-            'sha256': hashlib.sha256(encoded).hexdigest()}
+assert set(FILENAMES) == set(RESULT_FILES), 'output names disagree with storage'
 
 
 def filename_for(name, label):
     """What the CLI would have called this output for this run."""
-    template = OUTPUTS[name][1]
+    template = FILENAMES[name]
     return template % label if '%s' in template else template
 
 
@@ -75,66 +57,38 @@ class ResultTooLarge(ValueError):
     """A result with more guides than the table layer will parse."""
 
 
-@dataclasses.dataclass(frozen=True)
-class Target:
-    """What a run designs over: a transcript, or a sequence given inline."""
-    kind: str
-    transcript_id: str = ''
-    name: str = ''
-    sequence: str = ''
-
-    @property
-    def label(self):
-        """What the output files are named after, as the CLI names them."""
-        return self.transcript_id if self.kind == 'transcript' else self.name
-
-    @property
-    def key(self):
-        """The part of the cache key that says what was designed.
-
-        A sequence is keyed by its digest rather than by itself: the key is canonical
-        JSON that gets hashed anyway, and a 100 kb sequence has no business being
-        built into a string first.
-        """
-        if self.kind == 'transcript':
-            return self.transcript_id
-        digest = hashlib.sha256(
-            ('%s\n%s' % (self.name, self.sequence)).encode('utf-8')).hexdigest()
-        return 'seq:%s' % digest
-
-    @property
-    def files(self):
-        """Which of the three files this kind of run writes.
-
-        Nucleotide input has no gene to look up, so it never annotates -- the CLI does
-        not create the file at all, and neither does this.
-        """
-        return ('designs', 'errors', 'clinvar') if self.kind == 'transcript' \
-            else ('designs', 'errors')
+class ServiceBusy(Exception):
+    """The service could not start or finish this design now; retrying is the answer."""
 
 
-def _design(target, source, clinvar, params):
-    """The only call into the engine: the transcript / sequence fork, in one place.
-
-    Nothing here redirects stdout. The engine and the transcript source log their
-    diagnostics rather than printing them, which is what keeps them off the stdio
-    transport's stream -- a redirect could not, since sys.stdout is process-global
-    and this server answers several calls at once.
-    """
-    if target.kind == 'transcript':
-        return design_transcript(source, clinvar, target.transcript_id, params)
-    return design_sequence(target.name, target.sequence, params)
+class DesignFailed(Exception):
+    """A design ran and produced nothing."""
 
 
 class RunStore(object):
     """Runs designs, stores them, and hands back parsed tables."""
 
-    def __init__(self, settings, references):
+    def __init__(self, settings, references, storage=None, tables=None):
+        """`storage` and `tables` are the web app's own when this is mounted on it.
+
+        Sharing them is not an optimisation. Two LocalStorage objects over one
+        directory hold two independent evict locks, so the two would sweep the results
+        tree against each other; two ResultCaches would each hold the full
+        `table_cache_rows` budget, doubling the memory that setting exists to bound.
+        Shared, a result parsed for a browser table is the same frame a query_guides
+        page reads. The stdio server passes neither and gets its own, as before.
+
+        `is not None` rather than `or`: an empty ResultCache is truthy today, but what
+        is being asked is whether one was given, and that should not depend on a
+        __bool__ nobody wrote.
+        """
         self.settings = settings
         self.references = references
-        self.storage = LocalStorage(settings.results_dir)
-        self.tables = ResultCache(settings.table_cache_rows,
-                                  settings.table_cache_frames)
+        self.storage = (storage if storage is not None
+                        else LocalStorage(settings.results_dir))
+        self.tables = (tables if tables is not None
+                       else ResultCache(settings.table_cache_rows,
+                                        settings.table_cache_frames))
         self._local = threading.local()
 
     # Sources are per-thread, for the reason service/references.py gives at length:
@@ -171,25 +125,24 @@ class RunStore(object):
         """
         run_id = cache_key(target.key, params, self.references.release,
                            self.references.clinvar_version, ENGINE_VERSION)
-        existing = self._manifest(run_id)
+        existing = self.lookup(run_id)
         if existing is not None:
-            self.storage.touch(manifest_key(run_id))
             return run_id, existing
 
         started = time.time()
-        designs, errors, annotations = _design(
+        designs, errors, annotations = design_target(
             target, self.source, self.clinvar if target.kind == 'transcript' else None,
             params)
         rows = {'designs': designs, 'errors': errors, 'clinvar': annotations}
         stats = {}
         for name in target.files:
-            raw = tsv.tsv_bytes(OUTPUTS[name][0], rows[name])
+            raw = tsv.tsv_bytes(COLUMNS[name], rows[name])
             self.storage.put(result_key(run_id, name), tsv.gzipped(raw))
             # Measured here because the uncompressed bytes are in hand exactly once.
             # Recording them lets export_run answer for a file's size, line count and
             # digest without decompressing it -- including when it has to refuse an
             # oversize export, which otherwise pays for the whole file to say no.
-            stats[name] = _file_stats(raw)
+            stats[name] = file_stats(raw)
 
         manifest = {
             'run_id': run_id,
@@ -218,33 +171,40 @@ class RunStore(object):
 
     # ---- reading back --------------------------------------------------------
 
-    def _manifest(self, run_id):
+    def lookup(self, run_id):
+        """The manifest for a handle, or None if nothing complete is stored.
+
+        The manifest is written last, so its presence is what says the result behind
+        it is whole. A hit is touched, because a view is a use: it is what keeps a
+        result a caller is still reading from being the next one evicted.
+        """
         try:
             stored = json.loads(self.storage.get(manifest_key(run_id)))
         except (KeyError, ValueError):
             return None
+        self.storage.touch(manifest_key(run_id))
         return self._filled(run_id, stored)
 
     def _filled(self, run_id, manifest):
-        """A stored manifest with the fields only this front door writes.
+        """A stored manifest with whatever its writer did not record.
 
-        The web service designs into the same store under the same key, so a run it
-        computed is a run this can serve -- but its manifest predates these fields.
-        Filling them in on read means a result that is sitting on disk is returned,
-        rather than raising a KeyError about a shape difference the caller cannot see
-        and did not cause.
+        Two writers put manifests in this store. The pool worker records everything it
+        can measure, but resolving a gene symbol there would cost a SELECT * over a row
+        holding the CDS and protein sequences, so the symbol is filled in here off the
+        index. An older manifest that predates the other fields is filled the same way,
+        which is what lets a result sitting on disk be returned rather than raising
+        about a shape difference the caller cannot see and did not cause.
         """
-        if 'run_id' in manifest and 'files' in manifest:
-            return manifest
         transcript_id = manifest.get('transcript_id', '')
         filled = dict(manifest)
         filled.setdefault('run_id', run_id)
         filled.setdefault('kind', 'transcript' if transcript_id else 'sequence')
         filled.setdefault('label', transcript_id)
-        filled.setdefault('gene', self.references.gene_name(transcript_id)
-                          if transcript_id else '')
+        if 'gene' not in filled:
+            filled['gene'] = (self.references.gene_name(transcript_id)
+                              if transcript_id else '')
         filled.setdefault('stats', {})
-        filled.setdefault('files', [name for name in OUTPUTS
+        filled.setdefault('files', [name for name in COLUMNS
                                     if self.storage.exists(result_key(run_id, name))])
         return filled
 
@@ -254,7 +214,7 @@ class RunStore(object):
         A handle whose result was swept is not an error in the caller's reasoning, so
         the message says what to do about it rather than what went wrong.
         """
-        manifest = self._manifest(run_id)
+        manifest = self.lookup(run_id)
         if manifest is None:
             raise RunNotFound(
                 'No stored result for that run_id. It may have been cleared; '
@@ -273,7 +233,7 @@ class RunStore(object):
         """A file's size, line count and digest, measured when it was written."""
         recorded = manifest.get('stats', {}).get(name)
         # A run the web service wrote carries no measurements, so they are taken now.
-        return recorded or _file_stats(gzip.decompress(self.stored(manifest, name)))
+        return recorded or file_stats(gzip.decompress(self.stored(manifest, name)))
 
     def table(self, run_id):
         """The parsed designs table for a handle, with coverage attached.

@@ -163,12 +163,19 @@ Protocol](https://modelcontextprotocol.io), so an assistant that speaks MCP can 
 base-editor experiment conversationally: resolve a gene, pick the MANE transcript,
 choose a deaminase, design, and then ask for the guides that matter.
 
+There are two ways to reach it. The deployed service serves it over HTTP, which needs
+nothing installed locally and no reference bundle:
+
+    claude mcp add --transport http bedesign https://<the service URL>/api/mcp
+
+Or run it locally over stdio, against your own bundle:
+
     pip install -r requirements-mcp.txt
     python -m mcp_server              # speaks MCP over stdin/stdout
 
-It reads the same local bundle the CLI does, so `REFDATA` must point at one. Register
-it with your client by absolute path — a stdio server is launched in the client's
-working directory, not this one:
+The local server reads the same bundle the CLI does, so `REFDATA` must point at one.
+Register it with your client by absolute path — a stdio server is launched in the
+client's working directory, not this one:
 
     claude mcp add bedesign-guides --scope local \
       --env PYTHONPATH=$PWD --env REFDATA=$PWD/refdata --env RESULTS_DIR=$PWD/results \
@@ -183,12 +190,22 @@ design; `design_guides` to run it; `query_guides`, `get_clinvar_annotations` and
 names a value the summary reported. Results are content-addressed under `RESULTS_DIR`,
 so asking the same question twice designs once.
 
+Mounted on the web service, `design_guides` runs in the same process pool the browser
+path uses, under the same cache key — so a design started in either place is one job
+writing one result, and asking for it from the other returns immediately. Because that
+pool is shared and bounded, a design can be turned away while every worker is busy; the
+tool says so and says to call again, which costs nothing because the result is
+content-addressed.
+
 `export_run` returns a file byte for byte as the CLI writes it. That is checked rather
 than asserted: `test/test_mcp_golden.py` drives the tools over the same six cases as
 the golden suite and compares all three outputs against the same fixtures, and
 `test/test_mcp_eval.py` replays a set of realistic design tasks and checks that every
 row handed back appears in the frozen output. The conversational layer is a way of
 reading the engine, not a second implementation of it.
+
+The MCP stack is optional: without `requirements-mcp.txt` installed, the HTTP mount is
+simply absent and `pytest test/ -q` skips the MCP tests rather than failing.
 
 ### Using the design engine from Python
 

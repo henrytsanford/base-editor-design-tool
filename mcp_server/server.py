@@ -28,7 +28,8 @@ from service.references import References
 from service.results import UnknownFilterValue
 
 from . import tools
-from .runs import ResultTooLarge, RunNotFound, RunStore
+from .runs import (DesignFailed, ResultTooLarge, RunNotFound, RunStore,
+                   ServiceBusy)
 from .tools import DEFAULT_MAX_BYTES, MAX_EXPORT_BYTES
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 # Errors a model can do something about: a bad parameter, a gene that is not there, a
 # handle that has been swept, a filter value this result does not contain. They come
 # back as tool errors with the message, rather than crashing the server.
-RECOVERABLE = (ValidationError, UnknownFilterValue, RunNotFound, ResultTooLarge)
+RECOVERABLE = (ValidationError, UnknownFilterValue, RunNotFound,
+               ResultTooLarge, ServiceBusy, DesignFailed)
 
 
 def _call(fn, *args, **kwargs):
@@ -65,20 +67,40 @@ def _call(fn, *args, **kwargs):
         raise ToolError(str(e.args[0] if e.args else e))
 
 
-def build_server(settings=None):
-    """The server, with its reference data opened once for the process."""
+async def _acall(fn, *args, **kwargs):
+    """`_call`, for the one tool that has to wait on something."""
+    try:
+        return await fn(*args, **kwargs)
+    except RECOVERABLE as e:
+        raise ToolError(str(e.args[0] if e.args else e))
+
+
+def build_server(settings=None, context=None):
+    """The server, with its reference data opened once for the process.
+
+    `context` is a callable returning the tools.AppContext, called when the server's
+    lifespan is entered. mcp_server/http.py passes one that hands over the web app's
+    own references, storage, table cache and job pool, so a mounted server shares them
+    rather than opening a second set. Without it the server opens its own, which is
+    what `python -m mcp_server` does.
+    """
     settings = settings or Settings.from_env()
 
-    @asynccontextmanager
-    async def lifespan(_server):
+    def default_context():
         # References opens the bundle and resolves the ClinVar database, so a
         # missing or stale one fails here rather than on the first design. The
         # engine's own sources are opened per thread by the RunStore.
         references = References(settings.refdata, settings.clinvar_db)
         log.info('bundle: %s (Ensembl %s)', references.bundle, references.release)
         log.info('clinvar: %s', references.clinvar_db)
-        yield tools.AppContext(settings=settings, references=references,
-                               runs=RunStore(settings, references))
+        return tools.AppContext(settings=settings, references=references,
+                                runs=RunStore(settings, references))
+
+    build = context or default_context
+
+    @asynccontextmanager
+    async def lifespan(_server):
+        yield build()
 
     mcp = MCPServer('bedesign-guides', instructions=INSTRUCTIONS,
                     version=tools.ENGINE_VERSION, lifespan=lifespan)
@@ -124,7 +146,7 @@ def build_server(settings=None):
         return _call(tools.list_editors, ctx.request_context.lifespan_context)
 
     @mcp.tool(title='Design guides', annotations=READ_ONLY)
-    def design_guides(
+    async def design_guides(
         ctx: Context,
         transcript_id: Annotated[str | None, Field(description=(
             'An Ensembl transcript, e.g. ENST00000307102. Give this or sequence.'))] = None,
@@ -163,7 +185,9 @@ def build_server(settings=None):
         Watch counts.errors: a non-zero count means the engine abandoned the
         transcript part-way, so the designs are incomplete rather than final.
         """
-        return _call(tools.design_guides, ctx.request_context.lifespan_context,
+        return await _acall(
+                     tools.design_guides, ctx.request_context.lifespan_context,
+                     request=getattr(ctx.request_context, 'request', None),
                      transcript_id=transcript_id, sequence=sequence,
                      sequence_name=sequence_name, preset=preset, pam=pam,
                      window=window, sg_len=sg_len, edit=edit,
