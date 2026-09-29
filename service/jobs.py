@@ -8,10 +8,7 @@ The worker writes the result objects itself rather than returning rows. TTN is 2
 guides, and sending that back through the pool's pickle channel would make the parent
 pay for the size of the answer.
 """
-import csv
 import dataclasses
-import gzip
-import io
 import json
 import logging
 import multiprocessing
@@ -22,7 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 from bedesign import (ANNOTATION_COLUMNS, DESIGN_COLUMNS, ENGINE_VERSION,
-                      ERROR_COLUMNS, design_transcript)
+                      ERROR_COLUMNS, design_transcript, tsv)
 from bedesign.transcript_source import ClinVarSource, LocalSource
 
 from .cachekey import manifest_key, result_key
@@ -47,23 +44,6 @@ def init_worker(bundle, clinvar_db, results_dir):
     _storage = LocalStorage(results_dir)
 
 
-def _tsv_gz(columns, rows):
-    """A gzipped TSV, byte-identical for identical rows.
-
-    mtime=0 for the same reason the golden fixtures use it: the bytes should depend
-    on the designs, not on when they were computed.
-    """
-    raw = io.BytesIO()
-    with gzip.GzipFile(fileobj=raw, mode='wb', mtime=0) as gz:
-        text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
-        writer = csv.writer(text, delimiter='\t')
-        writer.writerow(columns)
-        writer.writerows(rows)
-        text.flush()
-        text.detach()
-    return raw.getvalue()
-
-
 def run_job(key, transcript_id, params, timeout):
     """Designs one transcript and writes its results. Runs in a worker process.
 
@@ -86,9 +66,9 @@ def run_job(key, transcript_id, params, timeout):
         signal.signal(signal.SIGALRM, previous)
 
     runtime = time.time() - started
-    _storage.put(result_key(key, 'designs'), _tsv_gz(DESIGN_COLUMNS, designs))
-    _storage.put(result_key(key, 'errors'), _tsv_gz(ERROR_COLUMNS, errors))
-    _storage.put(result_key(key, 'clinvar'), _tsv_gz(ANNOTATION_COLUMNS, annotations))
+    _storage.put(result_key(key, 'designs'), tsv.tsv_gz(DESIGN_COLUMNS, designs))
+    _storage.put(result_key(key, 'errors'), tsv.tsv_gz(ERROR_COLUMNS, errors))
+    _storage.put(result_key(key, 'clinvar'), tsv.tsv_gz(ANNOTATION_COLUMNS, annotations))
     manifest = {
         'transcript_id': transcript_id,
         'params': dataclasses.asdict(params),

@@ -25,10 +25,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
+from bedesign import ENGINE_VERSION
 from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
-from . import coverage
 from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
                        result_key)
 from .config import Settings
@@ -39,9 +38,9 @@ from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PAR
                      parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
-from .results import (ANY_MATCH, CLASS_LABELS, ResultCache, ResultTable,
-                      UnknownFilterValue)
+from .results import ANY_MATCH, CLASS_LABELS, ResultCache, UnknownFilterValue
 from .storage import LocalStorage
+from .tables import load_table
 
 log = logging.getLogger(__name__)
 
@@ -325,15 +324,8 @@ def create_app(settings=None):
             # The coverage panels are built inside the cached load, so they are
             # computed once per result and share the dedupe that keeps two
             # simultaneous misses from parsing the same frame twice.
-            table = ResultTable(storage.get(result_key(key, 'designs')),
-                                DESIGN_COLUMNS)
-            shape = references.geometry(transcript_id)
-            if shape is not None and shape['exons']:
-                table.coverage = coverage.Coverage(
-                    table,
-                    coverage.Geometry(shape['exons'], shape['cds'], shape['strand'],
-                                      params.intron_buffer))
-            return table
+            return load_table(storage, references, key, transcript_id,
+                              params.intron_buffer)
 
         table = app.state.tables.get(key, load)
         result = table.select(view)
