@@ -72,6 +72,25 @@ CATEGORY_CLASS = {
 }
 
 
+def page_of(matched, page):
+    """Which page a request lands on, out of how many, and where it starts.
+
+    One rule for every paged view -- the table, the annotation file, the summary's
+    page count -- so they cannot come to disagree about how many pages a result has.
+    The page is clamped to the last one that exists, so a stale link deep into a
+    result that is now filtered down still lands on rows rather than on nothing.
+    """
+    pages = max(1, math.ceil(matched / ROWS_PER_PAGE))
+    page = min(max(page, 1), pages)
+    return page, pages, (page - 1) * ROWS_PER_PAGE
+
+
+# The shape facets() returns, with nothing in it: what a caller reports for a
+# result too large to parse. Beside facets() so the two cannot disagree.
+EMPTY_FACETS = {'consequence': [], 'significance': [], 'any_match': 0,
+                'edits': []}
+
+
 class UnknownFilterValue(ValueError):
     """A filter naming a value this result does not contain.
 
@@ -276,10 +295,8 @@ class ResultTable(object):
         mask = self._filter_mask(view)
         positions = np.arange(self.total) if mask is None else np.flatnonzero(mask)
         matched = int(positions.size)
-        pages = max(1, math.ceil(matched / ROWS_PER_PAGE))
-        page = min(max(view.page, 1), pages)
+        page, pages, start = page_of(matched, view.page)
         positions = self._ordered(positions, view)
-        start = (page - 1) * ROWS_PER_PAGE
         window = self.frame.take(positions[start:start + ROWS_PER_PAGE])
         return Page(rows=window.values.tolist(), matched=matched, page=page,
                     pages=pages)

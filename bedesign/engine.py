@@ -8,11 +8,14 @@ which is what the web service does, one per worker process.
 The three outputs are the three files the CLI writes, as lists of rows under
 DESIGN_COLUMNS, ERROR_COLUMNS and ANNOTATION_COLUMNS.
 """
+import logging
 import re
 from collections import namedtuple
 from dataclasses import dataclass
 
 from .transcript_source import empty_variants
+
+log = logging.getLogger(__name__)
 
 # The header of sgrna_designs_<name>.txt
 DESIGN_COLUMNS = [
@@ -991,7 +994,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 				if context_for_trans == '':
 					if error == '':
 						error = 'No context_for_trans found'
-					print(error)
+					log.warning('%s', error)
 					errors.append([gene_name, t, sgrna, sgrna_strand, error])
 
 				if context_for_trans != '':
@@ -1052,7 +1055,7 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 				if context_for_trans == '':
 					if error == '':
 						error = 'No context_for_trans found'
-					print(error)
+					log.warning('%s', error)
 					errors.append([gene_name, t, sgrna, sgrna_strand, error])
 
 				if context_for_trans != '':

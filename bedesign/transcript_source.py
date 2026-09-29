@@ -9,6 +9,7 @@ It also serves the other reference set a run needs, the ClinVar variants for a g
 """
 import glob
 import json
+import logging
 import os
 import random
 import re
@@ -18,6 +19,8 @@ import time
 import pandas as pd
 import requests
 from Bio.Seq import reverse_complement
+
+log = logging.getLogger(__name__)
 
 ENSEMBL_SERVER = "https://rest.ensembl.org"
 ENSEMBL_ATTEMPTS = 7
@@ -107,8 +110,8 @@ def ensembl_get(ext, headers, attempts=ENSEMBL_ATTEMPTS, timeout=ENSEMBL_TIMEOUT
             delay = 2 ** attempt + random.uniform(0, 1)
         # cap the wait even if Retry-After asks for something absurd
         delay = min(delay, ENSEMBL_MAX_BACKOFF)
-        print('Ensembl request failed (%s), retrying in %.0fs (attempt %d of %d)'
-              % (last, delay, attempt + 1, attempts))
+        log.warning('Ensembl request failed (%s), retrying in %.0fs (attempt %d of %d)',
+                    last, delay, attempt + 1, attempts)
         time.sleep(delay)
     raise EnsemblUnavailable(
         "Ensembl REST API is unavailable: %s after %d attempts for %s"

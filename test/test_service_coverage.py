@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from service import coverage
-from service.jobs import _tsv_gz
+from bedesign import tsv
 from service.params import TableView
 from service.results import ResultTable, UnknownFilterValue
 
@@ -24,7 +24,7 @@ COLUMNS = ['sgrna genomic position', 'sgRNA Strand', 'Mutation category',
 
 def frame(rows):
     """A designs table with only the columns the panels read."""
-    return ResultTable(_tsv_gz(COLUMNS, rows), COLUMNS)
+    return ResultTable(tsv.tsv_gz(COLUMNS, rows), COLUMNS)
 
 
 def layout(geometry, *positions):

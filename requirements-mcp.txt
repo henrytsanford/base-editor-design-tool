@@ -1,0 +1,4 @@
+# The MCP server. The CLI needs requirements.txt alone and the web service needs
+# requirements-service.txt; neither should have to install this one's stack.
+-r requirements.txt
+mcp >= 2.2, < 3
