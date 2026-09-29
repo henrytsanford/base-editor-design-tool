@@ -10,6 +10,8 @@ from concurrent.futures.process import BrokenProcessPool
 
 import pytest
 
+from bedesign import tsv
+
 import service.jobs as jobs
 from service.config import Settings
 from service.jobs import ClientBusy, JobPool, JobTimeout, PoolBusy
@@ -270,6 +272,6 @@ def test_the_alarm_is_cleared_when_a_design_finishes(monkeypatch):
 
 def test_tsv_bytes_do_not_depend_on_when_they_were_written():
     """mtime=0, for the reason the golden fixtures use it."""
-    first = jobs._tsv_gz(['a', 'b'], [['1', '2']])
+    first = tsv.tsv_gz(['a', 'b'], [['1', '2']])
     time.sleep(1.1)
-    assert jobs._tsv_gz(['a', 'b'], [['1', '2']]) == first
+    assert tsv.tsv_gz(['a', 'b'], [['1', '2']]) == first

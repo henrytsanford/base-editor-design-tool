@@ -10,7 +10,7 @@ import time
 import pytest
 
 from bedesign import DESIGN_COLUMNS
-from service.jobs import _tsv_gz
+from bedesign import tsv
 from service.params import TableView
 from service.results import (ANY_MATCH, ROWS_PER_PAGE, ResultCache, ResultTable,
                              UnknownFilterValue)
@@ -32,7 +32,7 @@ def table(raw):
 def tsv_gz(rows):
     """A designs file with the real header and the given rows."""
     padded = [list(row) + [''] * (len(DESIGN_COLUMNS) - len(row)) for row in rows]
-    return _tsv_gz(DESIGN_COLUMNS, padded)
+    return tsv.tsv_gz(DESIGN_COLUMNS, padded)
 
 
 def test_every_cell_survives_parsing_as_written(table):
