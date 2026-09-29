@@ -12,7 +12,6 @@ if sys.version_info < (3, 9):
 
 import argparse
 import contextlib
-import csv
 import os
 from datetime import datetime
 
@@ -32,6 +31,9 @@ from bedesign import (
 	design_transcript,
 	strip_tr_version,
 )
+# The TSV dialect the three output files are written in, shared with the service
+# worker and the MCP server so the three cannot drift apart.
+from bedesign import tsv
 # Transcript reference data, from the Ensembl REST API or a local bundle.
 from bedesign.transcript_source import (
 	BundleNotFound,
@@ -140,7 +142,7 @@ def reference_error_guard(output_folder):
 
 def write_readme(output_folder, input_file, params, clinvar, source):
 	with open(output_folder + '/README.txt', 'w') as o:
-		w = csv.writer(o, delimiter='\t')
+		w = tsv.writer(o)
 		w.writerow(['Input file: ' + input_file])
 		w.writerow(['PAM: ' + params.pam])
 		w.writerow(['Edit window: ' + params.window])
@@ -216,7 +218,7 @@ def main():
 	def opened(stack, filename, columns):
 		path = os.path.join(output_folder, filename % args.output_name
 							if '%s' in filename else filename)
-		writer = csv.writer(stack.enter_context(open(path, 'w')), delimiter='\t')
+		writer = tsv.writer(stack.enter_context(open(path, 'w')))
 		writer.writerow(columns)
 		return writer
 

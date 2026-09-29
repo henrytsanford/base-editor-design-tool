@@ -156,6 +156,40 @@ intentional change to the output, rewrite them and review the diff:
 
     pytest test/test_golden.py --regenerate-golden
 
+### Designing guides from a chat assistant (MCP)
+
+`mcp_server/` exposes the engine over the [Model Context
+Protocol](https://modelcontextprotocol.io), so an assistant that speaks MCP can plan a
+base-editor experiment conversationally: resolve a gene, pick the MANE transcript,
+choose a deaminase, design, and then ask for the guides that matter.
+
+    pip install -r requirements-mcp.txt
+    python -m mcp_server              # speaks MCP over stdin/stdout
+
+It reads the same local bundle the CLI does, so `REFDATA` must point at one. Register
+it with your client by absolute path — a stdio server is launched in the client's
+working directory, not this one:
+
+    claude mcp add bedesign-guides --scope local \
+      --env PYTHONPATH=$PWD --env REFDATA=$PWD/refdata --env RESULTS_DIR=$PWD/results \
+      -- $(which python) -m mcp_server
+
+Seven tools: `resolve_gene`, `list_transcripts` and `list_editors` to settle what to
+design; `design_guides` to run it; `query_guides`, `get_clinvar_annotations` and
+`export_run` to read the result back.
+
+`design_guides` returns counts, per-exon coverage and a run handle rather than guides
+— a transcript routinely yields thousands — and every filter `query_guides` accepts
+names a value the summary reported. Results are content-addressed under `RESULTS_DIR`,
+so asking the same question twice designs once.
+
+`export_run` returns a file byte for byte as the CLI writes it. That is checked rather
+than asserted: `test/test_mcp_golden.py` drives the tools over the same six cases as
+the golden suite and compares all three outputs against the same fixtures, and
+`test/test_mcp_eval.py` replays a set of realistic design tasks and checks that every
+row handed back appears in the frozen output. The conversational layer is a way of
+reading the engine, not a second implementation of it.
+
 ### Using the design engine from Python
 
 The engine is importable, so it can be used without the command line:
