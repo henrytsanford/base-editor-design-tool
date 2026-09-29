@@ -73,8 +73,13 @@ def test_the_tools_reproduce_the_golden_output(client, name, transcript, gene):
         read_golden(name, 'clinvar_annotations').splitlines()) - 1
 
 
+@pytest.mark.bundle
 def test_the_nucleotide_path_reproduces_its_golden_output(client):
-    """A pasted sequence, which needs no gene and writes no annotations."""
+    """A pasted sequence, which needs no gene and writes no annotations.
+
+    Bundle-marked even so: the design consults no reference, but the server opens one
+    when it starts, so the fixture cannot build without it.
+    """
     name, sequence = gfp_sequence()
     run = client.call('design_guides',
                       dict(GOLDEN_PARAMS, sequence=sequence, sequence_name=name))

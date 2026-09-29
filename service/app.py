@@ -15,6 +15,7 @@ table re-renders a cached result instead of computing a new one.
 """
 import contextlib
 import dataclasses
+import importlib.util
 import json
 import logging
 import os
@@ -28,8 +29,8 @@ from fastapi.templating import Jinja2Templates
 from bedesign import ENGINE_VERSION
 from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
-from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
-                       result_key)
+from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, Target, cache_key,
+                       manifest_key, result_key)
 from .config import Settings
 from .jobs import ClientBusy, JobPool, PoolBusy
 from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PARAMS,
@@ -41,6 +42,16 @@ from .references import GENE_LIMIT, References
 from .results import ANY_MATCH, CLASS_LABELS, ResultCache, UnknownFilterValue
 from .storage import LocalStorage
 from .tables import load_table
+
+# The MCP front door is optional: its stack lives in requirements-mcp.txt, and
+# test/conftest.py skips the MCP tests without it so `pytest test/ -q` works on a
+# CLI-only install. This module has to import and serve either way. find_spec rather
+# than `try: import mcp`, so a genuine error raised from inside the MCP package still
+# fails loudly instead of silently dropping the mount.
+if importlib.util.find_spec('mcp') is None:
+    mount_mcp = None
+else:
+    from mcp_server.http import mount_mcp
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +147,16 @@ def create_app(settings=None):
                  app.state.references.bundle, app.state.references.clinvar_version,
                  app.state.storage.root)
         try:
-            yield
+            # Entered inside this one, and in this order for two reasons: the MCP
+            # server's context reads app.state, so it has to come after that is built;
+            # and leaving it cancels any tool call still waiting on a design before
+            # `finally` shuts the pool down, rather than after. AsyncExitStack rather
+            # than an if/else, so the yield is written once -- two yields in an
+            # asynccontextmanager is how a teardown path gets missed.
+            async with contextlib.AsyncExitStack() as stack:
+                if mcp_lifespan is not None:
+                    await stack.enter_async_context(mcp_lifespan())
+                yield
         finally:
             app.state.pool.shutdown()
 
@@ -145,6 +165,12 @@ def create_app(settings=None):
     app.state.settings = settings
     app.mount('/static', StaticFiles(
         directory=os.path.join(os.path.dirname(__file__), 'static')), name='static')
+    # Mounted here rather than in the lifespan, because an app's routes are fixed once
+    # it starts. What comes back is what `lifespan` above has to enter: Starlette does
+    # not run a mounted sub-app's lifespan, and for the MCP app that lifespan is the
+    # task group its session manager owns. `lifespan` closes over this name, which is
+    # bound before it is ever called.
+    mcp_lifespan = mount_mcp(app, settings) if mount_mcp is not None else None
 
     @app.middleware('http')
     async def security_headers(request, call_next):
@@ -164,13 +190,24 @@ def create_app(settings=None):
         return page(request, 'error.html', status_code=400, message=message)
 
     @app.get('/healthz')
-    def healthz():
+    def healthz(request: Request):
         # A 503 once a worker has died, until a job next finishes on the replacement
         # pool. Answering 'ok' regardless would leave a liveness probe nothing to see.
         healthy = app.state.pool.healthy()
+        # Logged, never returned: what Host and X-Forwarded-For actually look like at
+        # the container is what decides TRUSTED_PROXY_HOPS, and it differs between the
+        # Hosting URL and the run.app one. `charging` is the address the rate limiter
+        # would bill, which is the only way to tell that it is identifying clients
+        # rather than pooling them all into one bucket. Returning a header to its
+        # sender would be a reflection this app has no use for.
+        log.info('healthz host=%s forwarded=%s charging=%s',
+                 scrub(request.headers.get('host')),
+                 scrub(request.headers.get('x-forwarded-for')),
+                 scrub(client_ip(request, settings.trusted_proxy_hops)))
         return JSONResponse(
             {'status': 'ok' if healthy else 'worker crashed',
-             'engine_version': ENGINE_VERSION},
+             'engine_version': ENGINE_VERSION,
+             'mcp': mount_mcp is not None},
             status_code=200 if healthy else 503)
 
     @app.get('/robots.txt', response_class=PlainTextResponse)
@@ -264,7 +301,9 @@ def create_app(settings=None):
                             message='Too many designs started from here. '
                                     'Wait a moment and reload.')
             try:
-                started = app.state.pool.submit(key, transcript_id, params, client)
+                started = app.state.pool.submit(
+                    key, Target(kind='transcript', transcript_id=transcript_id),
+                    params, client)
             except ClientBusy:
                 return _client_busy(request)
             except PoolBusy:

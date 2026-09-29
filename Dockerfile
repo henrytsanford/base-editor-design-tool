@@ -28,8 +28,9 @@ WORKDIR /opt/bedesign/app
 
 # Dependencies are their own layer: they change far less often than the engine,
 # so editing bedesign/ does not reinstall pandas.
-COPY requirements.txt requirements-service.txt constraints.txt ./
-RUN pip install --no-cache-dir -r requirements-service.txt -c constraints.txt
+COPY requirements.txt requirements-service.txt requirements-mcp.txt constraints.txt ./
+RUN pip install --no-cache-dir \
+        -r requirements-service.txt -r requirements-mcp.txt -c constraints.txt
 
 COPY --chown=bedesign:bedesign . .
 

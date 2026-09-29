@@ -9,6 +9,7 @@ guides, and sending that back through the pool's pickle channel would make the p
 pay for the size of the answer.
 """
 import dataclasses
+import hashlib
 import json
 import logging
 import multiprocessing
@@ -19,10 +20,10 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 from bedesign import (ANNOTATION_COLUMNS, DESIGN_COLUMNS, ENGINE_VERSION,
-                      ERROR_COLUMNS, design_transcript, tsv)
+                      ERROR_COLUMNS, design_sequence, design_transcript, tsv)
 from bedesign.transcript_source import ClinVarSource, LocalSource
 
-from .cachekey import manifest_key, result_key
+from .cachekey import RESULT_FILES, manifest_key, result_key
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -33,8 +34,42 @@ _clinvar = None
 _storage = None
 
 
+# Which columns each of the three outputs holds. The storage layer owns the same
+# vocabulary; a name here that it does not know would be a file nothing could read
+# back.
+COLUMNS = {'designs': DESIGN_COLUMNS, 'errors': ERROR_COLUMNS,
+           'clinvar': ANNOTATION_COLUMNS}
+assert set(COLUMNS) == set(RESULT_FILES), 'output names disagree with storage'
+
+
 class JobTimeout(Exception):
     """A design job passed its wall-clock cap."""
+
+
+def design_target(target, source, clinvar, params):
+    """The only call into the engine: the transcript / sequence fork, in one place.
+
+    Both front doors reach it -- a worker process through `run_job`, and the stdio MCP
+    server through RunStore.design -- so which entry point a kind of target uses is
+    decided here and nowhere else.
+    """
+    if target.kind == 'transcript':
+        return design_transcript(source, clinvar, target.transcript_id, params)
+    return design_sequence(target.name, target.sequence, params)
+
+
+def file_stats(raw):
+    """A written file's size, line count and digest.
+
+    Measured over the text form -- the bytes a download or an export hands back --
+    rather than the stored gzip, so the figures describe the same content whichever
+    encoding a caller asks for. Recorded when a file is written because that is the
+    one moment its uncompressed bytes are already in hand.
+    """
+    text = tsv.as_text(raw)
+    encoded = text.encode('utf-8')
+    return {'bytes': len(encoded), 'lines': text.count('\n'),
+            'sha256': hashlib.sha256(encoded).hexdigest()}
 
 
 def init_worker(bundle, clinvar_db, results_dir):
@@ -44,12 +79,16 @@ def init_worker(bundle, clinvar_db, results_dir):
     _storage = LocalStorage(results_dir)
 
 
-def run_job(key, transcript_id, params, timeout):
-    """Designs one transcript and writes its results. Runs in a worker process.
+def run_job(key, target, params, timeout):
+    """Designs one target and writes its results. Runs in a worker process.
 
     The wall-clock cap is enforced here rather than in the parent because
     ProcessPoolExecutor cannot cancel a future that has already started: a
     parent-side timeout would return to the user while the worker kept a core busy.
+
+    The gene symbol is deliberately not resolved here. LocalSource's only row
+    accessor is SELECT *, which would pull the CDS and protein sequences -- megabytes,
+    and why that database is over a gigabyte. The parent fills it in off the index.
     """
     started = time.time()
 
@@ -59,25 +98,35 @@ def run_job(key, transcript_id, params, timeout):
     previous = signal.signal(signal.SIGALRM, expired)
     signal.alarm(timeout)
     try:
-        designs, errors, annotations = design_transcript(
-            _source, _clinvar, transcript_id, params)
+        designs, errors, annotations = design_target(
+            target, _source, _clinvar if target.kind == 'transcript' else None, params)
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
 
     runtime = time.time() - started
-    _storage.put(result_key(key, 'designs'), tsv.tsv_gz(DESIGN_COLUMNS, designs))
-    _storage.put(result_key(key, 'errors'), tsv.tsv_gz(ERROR_COLUMNS, errors))
-    _storage.put(result_key(key, 'clinvar'), tsv.tsv_gz(ANNOTATION_COLUMNS, annotations))
+    rows = {'designs': designs, 'errors': errors, 'clinvar': annotations}
+    stats = {}
+    for name in target.files:
+        # tsv_bytes then gzipped, rather than tsv_gz: identical bytes, but the
+        # uncompressed form is in hand for the one moment it can be measured free.
+        raw = tsv.tsv_bytes(COLUMNS[name], rows[name])
+        _storage.put(result_key(key, name), tsv.gzipped(raw))
+        stats[name] = file_stats(raw)
     manifest = {
-        'transcript_id': transcript_id,
+        'run_id': key,
+        'kind': target.kind,
+        'transcript_id': target.transcript_id,
+        'label': target.label,
         'params': dataclasses.asdict(params),
         'engine_version': ENGINE_VERSION,
         'reference': _source.describe(),
-        'clinvar': _clinvar.describe(),
+        'clinvar': _clinvar.describe() if target.kind == 'transcript' else 'none',
         'designs': len(designs),
         'errors': len(errors),
-        'annotations': len(annotations),
+        'annotations': len(annotations) if target.kind == 'transcript' else 0,
+        'files': list(target.files),
+        'stats': stats,
         'runtime_seconds': round(runtime, 3),
     }
     # Written last, so its presence means the result behind it is complete.
@@ -156,11 +205,23 @@ class JobPool(object):
             entry = self._failed.get(key)
             if entry is None:
                 return None
-            message, when = entry
+            message, when, _reason = entry
             if time.time() - when > self.settings.failure_ttl:
                 del self._failed[key]
                 return None
             return message
+
+    def failure_reason(self, key):
+        """Why a recent failure happened: 'timeout', 'crashed' or 'error'.
+
+        Separate from `failure`, which returns the sentence a page shows. 'Reload to
+        try again' is not something a model can do, so a caller that is not a browser
+        reads the reason and says its own. Only meaningful right after `failure`
+        returned a message: that is the call which ages an expired entry out.
+        """
+        with self._lock:
+            entry = self._failed.get(key)
+            return entry[2] if entry is not None else None
 
     def running(self, key):
         with self._lock:
@@ -172,7 +233,7 @@ class JobPool(object):
         with self._lock:
             return client in self._clients
 
-    def submit(self, key, transcript_id, params, client=None):
+    def submit(self, key, target, params, client=None):
         """Starts a job unless one is already running for this key.
 
         Returns True if this call started it, False if it joined one already in
@@ -190,7 +251,7 @@ class JobPool(object):
                 # retries, so a backlog never builds up behind a slow gene.
                 raise PoolBusy()
             self._failed.pop(key, None)
-            args = (run_job, key, transcript_id, params, self.settings.job_timeout)
+            args = (run_job, key, target, params, self.settings.job_timeout)
             try:
                 future = self._pool.submit(*args)
             except BrokenProcessPool:
@@ -208,10 +269,12 @@ class JobPool(object):
 
     def _finished(self, key, client, pool, future):
         message = None
+        reason = None
         crashed = False
         try:
             future.result()
         except JobTimeout:
+            reason = 'timeout'
             message = ('This design took longer than %d seconds and was stopped.'
                        % self.settings.job_timeout)
         except BrokenProcessPool:
@@ -227,7 +290,7 @@ class JobPool(object):
             if client is not None and self._clients.get(client) == key:
                 del self._clients[client]
             if message is not None:
-                self._failed[key] = (message, time.time())
+                self._failed[key] = (message, time.time(), reason)
             self._crashed = crashed
             # Every job on a broken pool fails at once. Only the first to get
             # here replaces it; the rest find a newer pool already in place.

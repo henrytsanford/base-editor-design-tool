@@ -16,6 +16,9 @@ import dataclasses
 import gzip
 import itertools
 import re
+import time
+
+import anyio
 
 from bedesign import ANNOTATION_COLUMNS, ENGINE_VERSION, tsv
 from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
@@ -23,12 +26,14 @@ from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 from service import params as svc_params
 from service.params import ValidationError
 from service.references import GENE_LIMIT, TRANSCRIPT_LIMIT
-from service.cachekey import RESULT_FILES
+from service.cachekey import RESULT_FILES, Target, cache_key
+from service.jobs import PoolBusy
+from service.ratelimit import client_ip
 from service.results import ROWS_PER_PAGE, page_of
 
 from . import summary
 from .query import Query
-from .runs import Target, filename_for
+from .runs import DesignFailed, ServiceBusy, filename_for
 
 RUN_ID = re.compile(r'^[0-9a-f]{64}$')
 # The nucleotide path marks introns by lower case, so case is meaningful and the
@@ -54,6 +59,10 @@ class AppContext:
     settings: object
     references: object
     runs: object
+    # The web app's, when this server is mounted on it. None on stdio, which is the
+    # signal to design in-process and to charge nobody.
+    pool: object = None
+    limiter: object = None
 
 
 def _run_id(value):
@@ -114,9 +123,9 @@ def list_editors(ctx):
 
 # ---- designing ---------------------------------------------------------------
 
-def design_guides(ctx, transcript_id=None, sequence=None, sequence_name=None,
-                  preset=None, pam=None, window=None, sg_len=None, edit=None,
-                  intron_buffer=None, filter_gc=None):
+async def design_guides(ctx, request=None, transcript_id=None, sequence=None,
+                        sequence_name=None, preset=None, pam=None, window=None,
+                        sg_len=None, edit=None, intron_buffer=None, filter_gc=None):
     """Designs every guide over a transcript or a pasted sequence.
 
     Returns the shape of the result and a handle to it, never the guides: a run is
@@ -139,11 +148,132 @@ def design_guides(ctx, transcript_id=None, sequence=None, sequence_name=None,
         target = Target(kind='sequence', name=_sequence_name(sequence_name),
                         sequence=_sequence(sequence))
 
-    run_id, manifest = ctx.runs.design(target, design_params)
+    if ctx.pool is None:
+        # stdio: no pool, so the design runs in this process -- on a worker thread,
+        # which is where the SDK already ran this whole function before it had to
+        # wait on anything.
+        run_id, manifest = await anyio.to_thread.run_sync(
+            ctx.runs.design, target, design_params)
+    else:
+        run_id = cache_key(target.key, design_params, ctx.references.release,
+                           ctx.references.clinvar_version, ENGINE_VERSION)
+        manifest = await _pooled(ctx, run_id, target, design_params, request)
     table = None
     if manifest['designs'] <= ctx.settings.table_max_rows:
-        table = ctx.runs.table(run_id)
+        # Off the event loop: a 50,000-row frame is ~65 MB of pandas work, and this
+        # is the one tool that does not already run on a thread.
+        table = await anyio.to_thread.run_sync(ctx.runs.table, run_id)
     return summary.build(manifest, table)
+
+
+# How often a waiting design_guides looks for the manifest the worker writes last.
+# Designs run from well under a second to the job timeout, so this is noise.
+POLL_SECONDS = 0.25
+
+
+async def _pooled(ctx, run_id, target, params, request):
+    """The design, run in the web app's process pool and waited for here.
+
+    The same pool /designs uses, which is the point: a design started in a browser and
+    the same design asked for here are one job writing one result, under the cache key
+    service/cachekey.py computes for both. Nothing comes back through the pool -- the
+    worker writes the files and then the manifest, so the manifest's presence is what
+    says the run is complete.
+    """
+    manifest = ctx.runs.lookup(run_id)
+    if manifest is not None:
+        return manifest                 # cached: free, and never charged a token
+    if ctx.pool.failure(run_id):
+        raise DesignFailed(_failure_message(ctx, run_id))
+    await _start(ctx, run_id, target, params, request)
+    return await _wait(ctx, run_id)
+
+
+async def _start(ctx, run_id, target, params, request):
+    """Starts the job, or joins one already running for this key.
+
+    /designs' order, for /designs' reasons: a running job is joined for free, and only
+    a call that would start one is charged a rate-limit token.
+
+    `client=None` is deliberate. The pool's one-job-per-client rule stops a browser
+    polling at its rate limit from holding every worker, but keyed on an address here
+    it would serialise a whole NAT, or a hosted model's egress, to one design at a
+    time -- with no page to explain the wait. What bounds this door instead is
+    PoolBusy and the token bucket.
+    """
+    if ctx.pool.running(run_id):
+        return
+    client = (client_ip(request, ctx.settings.trusted_proxy_hops)
+              if request is not None else None)
+    if client is not None and ctx.limiter is not None and not ctx.limiter.allow(client):
+        raise ServiceBusy(
+            'Too many designs started from this address. Wait about %d seconds and '
+            'call design_guides again with the same arguments. Reading a run you '
+            'already have, with query_guides or export_run, is not limited.'
+            % ctx.settings.rate_seconds)
+    deadline = time.monotonic() + ctx.settings.mcp_wait
+    while not ctx.pool.running(run_id):
+        try:
+            ctx.pool.submit(run_id, target, params)
+            return
+        except PoolBusy:
+            # There is no queue, by design: /designs answers a busy pool with a page
+            # that retries. Waiting here is better than spending the model's turn,
+            # but only for as long as the token this call was already charged is
+            # worth.
+            if time.monotonic() >= deadline:
+                raise ServiceBusy(
+                    'Every design worker is busy and this design was not started. '
+                    'Nothing was lost: call design_guides again with the same '
+                    'arguments in about a minute.')
+            await anyio.sleep(POLL_SECONDS)
+
+
+async def _wait(ctx, run_id):
+    """Waits for the manifest, which the worker writes last.
+
+    Polled rather than awaited on a future: submit() reports whether this call started
+    the job, not which future runs it, and a job /designs started a moment earlier may
+    have no future left to hand over.
+
+    `running` is sampled before the manifest is read, because the worker writes the
+    manifest, returns, and only then is dropped from the running table -- so a job
+    that finishes between the two reads is seen as finished on this pass rather than
+    declared gone.
+    """
+    deadline = time.monotonic() + ctx.settings.job_timeout + ctx.settings.mcp_wait
+    while True:
+        running = ctx.pool.running(run_id)
+        manifest = ctx.runs.lookup(run_id)
+        if manifest is not None:
+            return manifest
+        if ctx.pool.failure(run_id):
+            raise DesignFailed(_failure_message(ctx, run_id))
+        if not running:
+            raise DesignFailed(
+                'The result was cleared before it could be read. Call design_guides '
+                'again with the same arguments.')
+        if time.monotonic() >= deadline:
+            raise ServiceBusy(
+                'This design is still running. Call design_guides again with exactly '
+                'the same arguments -- it will pick up the finished result rather '
+                'than starting over.')
+        await anyio.sleep(POLL_SECONDS)
+
+
+def _failure_message(ctx, run_id):
+    """The pool's failure, said in terms a model can act on.
+
+    The pool's own message ends 'Reload to try again', which is advice for a browser.
+    """
+    if ctx.pool.failure_reason(run_id) == 'timeout':
+        return ('This design ran longer than %d seconds and was stopped. Narrow it: '
+                'a more specific PAM, one deaminase (edit="C-T" or edit="A-G") '
+                'rather than "all", or a shorter transcript.'
+                % ctx.settings.job_timeout)
+    return ('This design failed on the server and no result was stored. Call '
+            'design_guides again; if it fails a second time the transcript or the '
+            'parameter combination is at fault rather than the service.')
 
 
 def _sequence(value):
