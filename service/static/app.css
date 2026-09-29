@@ -4,17 +4,20 @@
         /* What a guide does, on the coverage map. Categorical: each consequence is
            its own hue, with no severity implied by colour. Checked against this
            page's white for colour-vision separation -- worst pair dE 9.2 -- so
-           changing one means checking the set again. The two non-coding classes are
-           grey, which is what keeps colour meaning "this changes the protein". */
+           changing one means checking the set again. Non-coding edits are grey,
+           which is what keeps colour meaning "this changes the protein". Guides
+           with no edit are not drawn, so they have no colour. */
         --lof: #eb6834; --mis: #2a78d6; --sil: #1baf7a;
-        --nc: #b9b9b9; --none: #e4e4e4;
+        --nc: #b9b9b9;
         /* The substitution matrix uses these same hues, with its count as the
            fill's opacity, set per square in coverage.py. */
         --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         /* Selection is ink, not a hue: every hue on the charts means a consequence.
            The exon grey is kept light enough that a selected exon, drawn in ink,
            stands out from it. */
-        --select: #1a1a1a; --exon-block: #7a7a7a; }
+        --select: #1a1a1a; --exon-block: #7a7a7a;
+        /* The grey pill behind a chip and a clickable key entry. */
+        --pill: #f0f0f0; --pill-hover: #e2e2e2; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
        font: 15px/1.5 var(--sans); }
@@ -37,7 +40,7 @@ th { background: #fafafa; position: sticky; top: 0; }
 /* Forms and controls. No inline styles anywhere: style-src is 'self'. */
 .card { border: 1px solid var(--line); border-radius: 6px; padding: 16px; max-width: 560px; }
 .field { margin: 0 0 12px; }
-.field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.field label, .field .label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 .field.checkbox label { display: inline-block; font-weight: 400; margin-right: 14px; }
 input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--line);
                 border-radius: 4px; background: var(--bg); color: var(--fg); }
@@ -48,11 +51,6 @@ button, a.button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0
                    border-radius: 4px; background: var(--accent); color: #fff;
                    cursor: pointer; display: inline-block; line-height: 1.5;
                    text-decoration: none; }
-/* The same shape as the primary button, outlined so it reads as the lesser action.
-   The inset shadow stands in for a border, so both are the same size. */
-a.button.secondary { background: var(--bg); color: var(--accent);
-                     box-shadow: inset 0 0 0 1px var(--accent); }
-a.button.secondary:hover { background: var(--accent-tint); }
 details.advanced { margin: 4px 0 14px; }
 details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
@@ -74,9 +72,9 @@ form.filters .field.checkbox { padding-bottom: 6px; }
 ul.chips { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
            gap: 6px; }
 ul.chips a { display: inline-block; padding: 2px 10px; border-radius: 999px;
-             font-size: 13px; color: var(--fg); background: #f0f0f0;
+             font-size: 13px; color: var(--fg); background: var(--pill);
              text-decoration: none; }
-ul.chips a:hover, ul.chips a:focus { background: #e2e2e2; }
+ul.chips a:hover, ul.chips a:focus { background: var(--pill-hover); }
 ul.chips a span { color: var(--muted); margin-left: 2px; }
 ul.chips .clear a { background: none; color: var(--muted); text-decoration: underline; }
 
@@ -114,13 +112,14 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
                justify-content: space-between; gap: 10px 24px; }
 /* A capped width, so the descriptions wrap in their column rather than pushing the
    heading off the row. */
-.download-bar { max-width: 440px; font-size: 13px; }
-.download-bar a.button.download { font-size: 15px; padding: 8px 16px; }
-.download-bar .primary-note { margin: 6px 0 4px; }
-.download-bar ul.also { list-style: none; padding: 0; margin: 0; }
-.download-bar li { margin: 2px 0; }
-.download-bar li a { font-weight: 600; }
-.download-bar .filename { color: var(--muted); }
+.downloads.compact { max-width: 440px; font-size: 13px; margin: 0; padding: 0;
+                     background: none; border: 0; }
+.downloads.compact .primary { display: block; }
+.downloads.compact .primary p { margin: 6px 0 4px; font-size: inherit; }
+.downloads.compact a.button.download { font-size: 15px; padding: 8px 16px; }
+.downloads.compact ul.also { margin: 0; border-top: 0; padding-top: 0; }
+.downloads.compact li { font-size: inherit; }
+.downloads.compact .muted { color: var(--muted); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
 
@@ -165,12 +164,17 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
 .c-mis { fill: var(--mis); background: var(--mis); }
 .c-sil { fill: var(--sil); background: var(--sil); }
 .c-nc { fill: var(--nc); background: var(--nc); }
-.c-none { fill: var(--none); background: var(--none); }
 .viz .hit { fill: transparent; }
 .viz .bin:hover .hit { fill: rgba(0, 0, 0, .06); }
 /* A selected substitution fades everything but its own guides: a whole bin that
    holds none of them, and the rest of a bin's stack where it does. */
 .viz .bin.dim rect, .viz .bin rect.dim { opacity: .15; }
+/* A bin is a link to its exon, so it shows a pointer like the exon does. */
+.viz a .bin { cursor: pointer; }
+/* An exon or square that would combine with the other selection into an empty table:
+   still drawn, so the chart keeps its shape, but faded and not a link. */
+.viz .exon.empty rect { opacity: .3; }
+.viz.mtx .cell.empty rect { fill-opacity: .12; }
 
 /* The matrix. Empty squares are the answer to "can this editor do it at all", so
    they are drawn rather than left out. */
@@ -193,8 +197,17 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
 .key .total { font-weight: 600; }
 .key li { display: flex; align-items: center; gap: 6px; }
 .key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
-.key i.c-none { box-shadow: inset 0 0 0 1px #ccc; }
 .key .note { color: var(--muted); font-style: italic; }
 .key li.off { visibility: hidden; }
+/* A class in the key is the consequence filter. It keeps the legend's look, ink
+   rather than link blue, and shows it is clickable the way a chip does: a grey
+   pill on hover, and an ink outline while it is the filter in force. The negative
+   margin keeps the pill's padding from spacing the entries further apart. */
+.key a { display: flex; align-items: center; gap: 6px; color: inherit;
+         text-decoration: none; padding: 1px 6px; margin: -1px -6px;
+         border-radius: 999px; }
+.key a:hover, .key a:focus { background: var(--pill); }
+.key a.on { background: var(--pill); box-shadow: inset 0 0 0 1px var(--select);
+            font-weight: 600; }
 /* The matrix's count scale: the opacity steps its squares use, in ink. */
 .key .steps svg { fill: var(--fg); }

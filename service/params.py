@@ -22,6 +22,7 @@ from bedesign.engine import ALL_EDITS, DesignParams, UnknownBaseEditor
 
 from . import coverage
 from .cachekey import RESULT_FILES
+from .results import CLASSES
 
 # No value a request can carry is longer than this; anything longer is a probe.
 MAX_VALUE_LEN = 64
@@ -49,8 +50,10 @@ GENE_PARAMS = ('q',) + EDITOR_ALL
 DOWNLOAD_PARAMS = DESIGN_PARAMS + ('file',)
 
 # How to show a result. None of these reach the cache key.
-VIEW_PARAMS = ('mutation', 'significance', 'deaminase', 'strand', 'hide_bsmbi',
-               'hide_4t', 'exon', 'sub', 'sort', 'dir', 'page')
+# `mutation` has no control on the page, which filters by `consequence` instead; it is
+# still read so a link naming one of the engine's own categories keeps working.
+VIEW_PARAMS = ('consequence', 'mutation', 'significance', 'deaminase', 'strand',
+               'hide_bsmbi', 'hide_4t', 'exon', 'sub', 'sort', 'dir', 'page')
 # Deliberately 'deaminase' rather than 'edit': 'edit' is already a design parameter
 # over the same C-T/A-G vocabulary, and one name for both would make a view setting
 # change the cache key.
@@ -248,6 +251,7 @@ def parse_genes_query(query):
 @dataclass(frozen=True)
 class TableView:
     """How to show a result: filters, sort and page. Never part of the cache key."""
+    consequence: str = ''
     mutation: str = ''
     significance: str = ''
     deaminase: str = ''
@@ -262,9 +266,9 @@ class TableView:
 
     @property
     def filtered(self):
-        return bool(self.mutation or self.significance or self.deaminase
-                    or self.strand or self.hide_bsmbi or self.hide_4t
-                    or self.exon or self.sub)
+        # Every field but sort and page is a filter, so a new one counts here.
+        return any(getattr(self, f.name) for f in dataclasses.fields(self)
+                   if f.name not in ('sort', 'dir', 'page'))
 
 
 def _choice(query, name, allowed):
@@ -318,6 +322,7 @@ def parse_view_query(query):
                 'sub names a residue change, e.g. Glu-Gly.')
 
     return TableView(
+        consequence=_choice(query, 'consequence', CLASSES),
         mutation=_open_value(query, 'mutation'),
         significance=_open_value(query, 'significance'),
         deaminase=_choice(query, 'deaminase', ALL_EDITS),

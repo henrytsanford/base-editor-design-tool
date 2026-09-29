@@ -1,5 +1,6 @@
 {# The substitution matrix, folded under the gene map. Plain SVG with no script, the
-   same as the map: each square is a link. The same editor fills the same squares in
+   same as the map: each square is a link, except one making no guide in the selected
+   exon, which is faded instead. The same editor fills the same squares in
    every transcript, so it is closed until wanted, and open whenever a square is
    selected, since that selection is what the map is then showing. #}
 <details class="panel matrix"{{ ' open' if view.sub else '' }}>
@@ -24,7 +25,7 @@
   <svg class="viz mtx" viewBox="0 0 {{ matrix.width }} {{ matrix.height }}" role="img"
        aria-label="Residue substitutions reachable with this editor">
     {% for cell in matrix.cells %}
-    {% if cell.url %}<a href="{{ cell.url }}">{% endif %}<g class="cell{{ ' on' if cell.selected else '' }}"><title>{{ cell.title }}</title><rect class="c-{{ cell.cls }}" x="{{ cell.x }}" y="{{ cell.y }}" width="{{ matrix.cell }}" height="{{ matrix.cell }}"{% if cell.opacity %} fill-opacity="{{ cell.opacity }}"{% endif %}/></g>{% if cell.url %}</a>{% endif %}
+    {% if cell.url %}<a href="{{ cell.url }}">{% endif %}<g class="cell{{ ' on' if cell.selected else '' }}{{ ' empty' if cell.empty else '' }}"><title>{{ cell.title }}</title><rect class="c-{{ cell.cls }}" x="{{ cell.x }}" y="{{ cell.y }}" width="{{ matrix.cell }}" height="{{ matrix.cell }}"{% if cell.opacity %} fill-opacity="{{ cell.opacity }}"{% endif %}/></g>{% if cell.url %}</a>{% endif %}
     {% endfor %}
     {% for rule in matrix.rules %}
     <line class="sep" x1="{{ matrix.left + rule * matrix.cell }}" x2="{{ matrix.left + rule * matrix.cell }}" y1="{{ matrix.top }}" y2="{{ matrix.top + matrix.size }}"/>

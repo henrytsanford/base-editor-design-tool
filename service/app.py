@@ -39,7 +39,8 @@ from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PAR
                      parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
-from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
+from .results import (ANY_MATCH, CLASS_LABELS, ResultCache, ResultTable,
+                      UnknownFilterValue)
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -48,6 +49,11 @@ TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), 't
 
 # How often the running page re-checks. Design doc 3 says 3 seconds.
 POLL_SECONDS = 3
+# Where a reloaded table page lands: the filter bar for anything done to the table,
+# the gene map for a click on either chart. Without them every click, applied filter
+# and page turn would reload scrolled back to the heading.
+RESULTS_ANCHOR = 'results'
+COVERAGE_ANCHOR = 'coverage'
 
 # The order parameters appear in a URL we build. Fixed, so the same view always has
 # the same link and two people comparing URLs see the same string.
@@ -91,12 +97,13 @@ def values_of(query):
     return {name: query[name] for name in query.keys()}
 
 
-def build_url(path, values, order, **overrides):
+def build_url(path, values, order, fragment=None, **overrides):
     """A link to `path` carrying these parameters, with some changed.
 
     Names outside `order` are dropped rather than passed through, which is how a
     download link sheds the filters and a transcript link sheds the search box.
     Empty and false values are omitted so an unset filter leaves no trace in the URL.
+    A `fragment` names the element the loaded page scrolls to.
     """
     merged = dict(values)
     merged.update(overrides)
@@ -106,7 +113,8 @@ def build_url(path, values, order, **overrides):
         if value is None or value == '' or value is False:
             continue
         items.append((name, 'true' if value is True else str(value)))
-    return '%s?%s' % (path, urlencode(items))
+    url = '%s?%s' % (path, urlencode(items))
+    return '%s#%s' % (url, fragment) if fragment else url
 
 
 def create_app(settings=None):
@@ -331,11 +339,14 @@ def create_app(settings=None):
         result = table.select(view)
         values = values_of(request.query_params)
 
-        def designs_url(**overrides):
+        def designs_url(anchor=RESULTS_ANCHOR, **overrides):
             # Any change to what is shown returns to the first page: page 4 of a
             # freshly filtered table is usually not where the user wanted to land.
+            # The fragment lands the reloaded page where the click was answered
+            # rather than back at the top.
             overrides.setdefault('page', None)
-            return build_url('/designs', values, DESIGNS_ORDER, **overrides)
+            return build_url('/designs', values, DESIGNS_ORDER, fragment=anchor,
+                             **overrides)
 
         # The page shows TABLE_COLUMNS, in that order; the download keeps them all.
         shown = [table.columns.index(column) for column in TABLE_COLUMNS
@@ -359,23 +370,44 @@ def create_app(settings=None):
                     if result.page < result.pages else '',
         }
 
-        # The panels, and the links that come off them. Selecting an exon or a
-        # substitution returns to page 1 and replaces the previous selection rather
-        # than adding to it, so two clicks on the chart cannot build a filter that
-        # matches nothing.
+        # The panels, and the links that come off them. An exon and a substitution
+        # combine, so "this change, in this exon" is two clicks; clicking a selected
+        # one again drops it alone. A pair that would match nothing is marked
+        # `empty` by the panel and gets no link, so the charts cannot build an
+        # empty table. Chart links land on the map, so both charts stay in view.
         map_view = matrix_view = selection = None
         if table.coverage is not None:
-            map_view = table.coverage.map_view(view.exon, view.sub)
-            matrix_view = table.coverage.matrix_view(view.sub)
+            map_view = table.coverage.map_view(view.exon, view.sub, view.consequence)
+            matrix_view = table.coverage.matrix_view(view.sub, view.exon)
             for exon in map_view['exons']:
-                exon['url'] = designs_url(
-                    exon=None if exon['selected'] else exon['number'], sub=None)
+                if exon['selected'] or not exon['empty']:
+                    exon['url'] = designs_url(
+                        anchor=COVERAGE_ANCHOR,
+                        exon=None if exon['selected'] else exon['number'])
+            # A bin filters to the exon most of its guides sit in.
+            for bin_ in map_view['bins']:
+                exon = map_view['exons'][bin_['exon'] - 1] if bin_['exon'] else None
+                if exon and 'url' in exon:
+                    bin_['url'] = exon['url']
+                    bin_['selected'] = exon['selected']
             for cell in matrix_view['cells']:
-                if cell['count']:
+                if cell['count'] and (cell['selected'] or not cell['empty']):
                     cell['url'] = designs_url(
-                        sub=None if cell['selected'] else cell['key'], exon=None)
+                        anchor=COVERAGE_ANCHOR,
+                        sub=None if cell['selected'] else cell['key'])
             if view.sub:
                 selection = table.coverage.selection(view.sub)
+
+        # The consequence key: each class a link that filters to it or, clicked
+        # again, drops it. It is the map's legend, so it lands on the map like the
+        # other chart clicks; with no map it sits in the filter bar instead.
+        facets = table.facets()
+        consequences = [dict(entry, selected=view.consequence == entry['cls'],
+                             url=designs_url(
+                                 anchor=COVERAGE_ANCHOR if map_view else RESULTS_ANCHOR,
+                                 consequence=None if view.consequence == entry['cls']
+                                 else entry['cls']))
+                        for entry in facets['consequence']]
 
         # Every filter in force, each with the link that drops it alone. The two
         # chart selections have no field in the form, so this is where they are
@@ -389,8 +421,12 @@ def create_app(settings=None):
             chip('exon', 'Exon %d' % view.exon)
         if selection:
             chip('sub', selection['label'])
+        if view.consequence:
+            chip('consequence', CLASS_LABELS[view.consequence].capitalize())
         if view.mutation:
-            chip('mutation', view.mutation)
+            # Named by its column, so it is not read as the consequence of that
+            # name: 'Missense' here also keeps guides whose worst edit is not.
+            chip('mutation', 'Mutation category: %s' % view.mutation)
         if view.significance:
             chip('significance', 'ClinVar: %s' % (
                 'any known variant' if view.significance == ANY_MATCH
@@ -404,19 +440,23 @@ def create_app(settings=None):
         if view.hide_4t:
             chip('hide_4t', 'No 4T')
 
+        controls = _form_controls(facets)
         return page(
             request, 'table.html', transcript_id=transcript_id, heading=heading,
             params=params,
             view=view, columns=columns, rows=rows, result=result,
             map=map_view, matrix=matrix_view, selection=selection, chips=chips,
-            total=manifest.get('designs', table.total), facets=table.facets(),
+            total=manifest.get('designs', table.total), facets=facets,
+            consequences=consequences,
             any_match=ANY_MATCH, strands=STRANDS, pager=pager,
-            clear_url=build_url('/designs', values, DESIGN_PARAMS),
-            # The chart selections ride along, so applying a filter narrows what
-            # was clicked rather than discarding it.
-            hidden=[(name, values[name])
-                    for name in DESIGN_PARAMS + ('exon', 'sub', 'sort', 'dir')
-                    if values.get(name)],
+            clear_url=build_url('/designs', values, DESIGN_PARAMS,
+                                fragment=RESULTS_ANCHOR),
+            results_anchor=RESULTS_ANCHOR, coverage_anchor=COVERAGE_ANCHOR,
+            # Every parameter without a control in the form rides along, so applying
+            # a filter narrows what was clicked rather than discarding it. The page
+            # is dropped: a new filter starts from the first.
+            hidden=[(name, values[name]) for name in DESIGNS_ORDER
+                    if name not in controls and values.get(name)],
             downloads=_downloads(values))
 
     def _download_only(request, heading, params, manifest):
@@ -429,6 +469,17 @@ def create_app(settings=None):
             downloads=_downloads(values_of(request.query_params)))
 
     return app
+
+
+def _form_controls(facets):
+    """The /designs parameters the filter form has a field for, plus `page`.
+
+    The edit dropdown is left out when there is only one edit to pick.
+    """
+    controls = {'significance', 'strand', 'hide_bsmbi', 'hide_4t', 'page'}
+    if len(facets['edits']) > 1:
+        controls.add('deaminase')
+    return controls
 
 
 # Each result file's plain-language name and what it holds, in the order the page

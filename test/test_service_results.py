@@ -56,6 +56,31 @@ def test_a_multi_edit_guide_matches_each_of_its_categories(table):
         'a guide categorised Missense;Silent; must appear under Missense')
 
 
+def test_each_consequence_count_is_what_its_filter_returns(table):
+    """The legend's count and the table under it cannot disagree, and since a guide
+    is counted by its worst edit the classes add up to the whole result."""
+    counts = {entry['cls']: entry['count'] for entry in table.facets()['consequence']}
+    for name, count in counts.items():
+        assert table.select(TableView(consequence=name)).matched == count, name
+    assert sum(counts.values()) == table.total
+
+
+def test_a_guide_is_classed_by_its_worst_edit():
+    """Missense beside a broken splice site is a loss of function, not a missense,
+    and an unedited guide is its own class."""
+    column = DESIGN_COLUMNS.index('Mutation category')
+
+    def row(categories):
+        cells = [''] * len(DESIGN_COLUMNS)
+        cells[column] = categories
+        return cells
+
+    table = ResultTable(tsv_gz([row('Missense;Splice-donor;'), row('Missense;Silent;'),
+                                row('')]), DESIGN_COLUMNS)
+    assert {entry['cls']: entry['count'] for entry in table.facets()['consequence']} \
+        == {'lof': 1, 'mis': 1, 'none': 1}
+
+
 def test_a_significance_filter_matches_whole_tokens_only(table):
     """'Likely benign' and 'Benign/Likely benign' are different classifications."""
     facets = dict(table.facets()['significance'])

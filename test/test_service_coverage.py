@@ -103,8 +103,25 @@ def test_a_guide_is_drawn_as_the_worst_thing_it_does():
     table = coverage.Coverage(frame([
         ['160', 'sense', 'Silent;Splice-donor', 'Lys5Lys;Exon1:+1', 'None;None'],
     ]), PLUS)
-    assert table.class_counts['lof'] == 1
-    assert table.class_counts.get('sil', 0) == 0
+    [bin_] = table.map_view()['bins']
+    assert [seg['cls'] for seg in bin_['segments']] == ['lof']
+
+
+def test_a_guide_with_no_edit_is_left_off_the_map():
+    """It has no consequence to draw, so it neither stacks nor sets the scale, but
+    its exon still counts it: clicking the exon lists it in the table."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+        ['165', 'sense', '', '', ''],
+        ['165', 'sense', '', '', ''],
+        ['380', 'sense', '', '', ''],
+    ]), PLUS)
+    view = table.map_view()
+    [bin_] = view['bins']
+    assert [seg['cls'] for seg in bin_['segments']] == ['mis']
+    assert bin_['segments'][0]['height'] == coverage.BAR_MAX
+    assert bin_['title'] == '1 guide: 1 missense'
+    assert table.exon_guides.tolist() == [3, 1]
 
 
 def test_a_guide_making_one_substitution_twice_counts_once():
@@ -125,12 +142,17 @@ def test_splice_edits_stay_out_of_the_matrix():
     assert not table.matrix_counts
 
 
-def test_a_selected_substitution_fades_the_bins_without_it():
-    """Exon 1's bin holds the Glu-Gly guide and keeps its colour; exon 2's does not."""
-    table = coverage.Coverage(frame([
+def two_exons():
+    """A Glu-Gly guide in exon 1 and a Lys-Arg guide in exon 2."""
+    return coverage.Coverage(frame([
         ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
         ['380', 'sense', 'Missense', 'Lys40Arg', 'None'],
     ]), PLUS)
+
+
+def test_a_selected_substitution_fades_the_bins_without_it():
+    """Exon 1's bin holds the Glu-Gly guide and keeps its colour; exon 2's does not."""
+    table = two_exons()
     assert [b['dim'] for b in table.map_view(selected_substitution='Glu-Gly')['bins']] \
         == [False, True]
     assert not any(b['dim'] for b in table.map_view()['bins'])
@@ -151,6 +173,52 @@ def test_a_selected_substitution_lights_only_its_own_guides():
     # the two halves still stack to the bin's full height
     assert sum(seg['height'] for seg in bin_['segments']) == coverage.BAR_MAX
     assert not bin_['dim']
+
+
+def test_a_selected_consequence_fades_the_other_classes():
+    """The legend is the filter, so picking a class there marks it on the map: a
+    bin holding none of it fades whole, and a shared bin keeps only its segment."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense', 'Glu27Gly', 'None'],
+        ['160', 'sense', 'Silent', 'Leu28Leu', 'None'],
+        ['380', 'sense', 'Silent', 'Lys40Lys', 'None'],
+    ]), PLUS)
+    shared, silent_only = table.map_view(consequence='mis')['bins']
+    assert [(seg['cls'], seg['dim']) for seg in shared['segments']] == [
+        ('mis', False), ('sil', True)]
+    assert not shared['dim'] and silent_only['dim']
+
+
+def test_a_consequence_narrows_a_selected_substitution():
+    """Both filters apply to the table, so the map lights only guides they both
+    keep: this Glu-Gly guide is a loss of function, not missense."""
+    table = coverage.Coverage(frame([
+        ['160', 'sense', 'Missense;Nonsense', 'Glu27Gly;Trp30Ter', 'None;None'],
+    ]), PLUS)
+    [bin_] = table.map_view(selected_substitution='Glu-Gly', consequence='mis')['bins']
+    assert bin_['dim']
+    [bin_] = table.map_view(selected_substitution='Glu-Gly', consequence='lof')['bins']
+    assert not bin_['dim']
+
+
+def test_a_bin_filters_to_the_exon_most_of_its_guides_sit_in():
+    table = two_exons()
+    assert [b['exon'] for b in table.map_view()['bins']] == [1, 2]
+
+
+def test_a_selected_substitution_marks_the_exons_without_it_empty():
+    """Exon 2 holds no Glu-Gly guide, so adding it to that selection matches nothing."""
+    table = two_exons()
+    exons = table.map_view(selected_substitution='Glu-Gly')['exons']
+    assert [e['empty'] for e in exons] == [False, True]
+    assert not any(e['empty'] for e in table.map_view()['exons'])
+
+
+def test_a_selected_exon_marks_the_squares_without_it_empty():
+    table = two_exons()
+    empty = {c['key'] for c in table.matrix_view(exon=1)['cells'] if c['empty']}
+    assert empty == {'Lys-Arg'}
+    assert not any(c['empty'] for c in table.matrix_view()['cells'])
 
 
 def test_the_matrix_counts_pathogenic_recreations():

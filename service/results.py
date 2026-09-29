@@ -55,6 +55,22 @@ NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', POSITION_COLUMN])
 # The flag columns hold 'yes' or the empty string -- never 'no'.
 FLAG_YES = 'yes'
 
+# What a guide does, worst first: the one vocabulary the page uses for consequence,
+# on the map, in its legend and as the filter. A guide is counted as the most severe
+# edit it makes, so a guide that knocks out a splice site and also makes a silent
+# change is a loss of function, and each guide sits in exactly one class.
+CLASSES = ('lof', 'mis', 'sil', 'nc', 'none')
+CLASS_RANK = {name: i for i, name in enumerate(CLASSES)}
+CLASS_LABELS = {'lof': 'loss of function', 'mis': 'missense', 'sil': 'silent',
+                'nc': 'non-coding edit', 'none': 'no edit in window'}
+# The engine's categories, mapped onto them. Nonsense and a broken splice site are
+# both a dead protein, so they share a class.
+CATEGORY_CLASS = {
+    'Nonsense': 'lof', 'Splice-donor': 'lof', 'Splice-acceptor': 'lof',
+    'Missense': 'mis', 'Silent': 'sil',
+    'UTR': 'nc', 'Intron': 'nc', 'Flanking': 'nc',
+}
+
 
 class UnknownFilterValue(ValueError):
     """A filter naming a value this result does not contain.
@@ -132,6 +148,7 @@ class ResultTable(object):
             (column, _value_masks(self.frame[column].to_numpy()))
             for column in VALUE_COLUMNS if column in self.frame.columns)
         self._any_match = self._compute_any_match()
+        self.row_classes = self._compute_classes()
         # The coverage panels, attached after construction by whoever has the
         # transcript's geometry -- this class only ever sees the designs file. None
         # when the bundle could not answer for the transcript, in which case the page
@@ -147,6 +164,15 @@ class ResultTable(object):
                 found |= mask
         return found
 
+    def _compute_classes(self):
+        """Each row's worst class, as a rank into CLASSES: every category lowers the
+        rank of the rows carrying it to its own class's, if that is worse."""
+        worst = np.full(self.total, CLASS_RANK['none'], dtype=np.int32)
+        for category, mask in self._masks.get(MUTATION_COLUMN, {}).items():
+            rank = CLASS_RANK[CATEGORY_CLASS.get(category, 'nc')]
+            worst[mask] = np.minimum(worst[mask], rank)
+        return worst
+
     def facets(self):
         """The filter vocabularies present in *this* result, with row counts.
 
@@ -158,18 +184,18 @@ class ResultTable(object):
             return sorted((token, int(mask.sum()))
                           for token, mask in masks.items() if token not in skip)
 
+        counts = np.bincount(self.row_classes, minlength=len(CLASSES)).tolist()
         return {
-            'mutation': counted(MUTATION_COLUMN),
+            # Worst first, and only the classes this result contains: a zero has
+            # nothing to point at.
+            'consequence': [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
+                            for name, count in zip(CLASSES, counts) if count],
             'significance': counted(SIGNIFICANCE_COLUMN, skip=(NO_MATCH,)),
             'any_match': int(self._any_match.sum()),
             # Which edits the result holds. Most editors make one, and a dropdown
             # with a single choice is not a choice.
             'edits': sorted(self._masks.get('Edit', {})),
         }
-
-    def token_masks(self, column):
-        """Every token's row mask for one ';'-joined column."""
-        return self._masks.get(column, {})
 
     def _token_mask(self, column, token):
         masks = self._masks.get(column, {})
@@ -193,6 +219,8 @@ class ResultTable(object):
         def keep(other):
             return other if mask is None else (mask & other)
 
+        if view.consequence:
+            mask = keep(self.row_classes == CLASS_RANK[view.consequence])
         if view.mutation:
             mask = keep(self._token_mask(MUTATION_COLUMN, view.mutation))
         if view.significance:

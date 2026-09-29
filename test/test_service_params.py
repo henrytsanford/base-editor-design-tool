@@ -158,6 +158,7 @@ def test_view_defaults_show_the_unfiltered_first_page():
 
 def test_any_filter_marks_the_view_as_filtered():
     assert view('mutation=Missense').filtered
+    assert view('consequence=mis').filtered
     assert view('hide_4t=true').filtered
     assert not view('sort=PAM&page=2').filtered, 'sorting is not filtering'
 
@@ -175,6 +176,7 @@ def test_sort_must_name_a_column_of_the_table():
     'page=0',
     'page=nine',
     'mutation=<script>',
+    'consequence=Missense',
     'hide_4t=perhaps',
     'exon=0',
     'sub=drop table',

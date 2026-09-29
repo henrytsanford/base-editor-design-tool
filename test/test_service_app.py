@@ -522,6 +522,50 @@ def test_clicking_a_square_filters_and_marks_the_map(client):
     assert 'class="bin"' in filtered.text
 
 
+def test_a_bar_on_the_map_links_to_its_exon(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    bins = re.findall(r'<a href="([^"]*)"><g class="bin', response.text)
+    assert bins, 'the map offers no bin link'
+    assert all('exon=' in html.unescape(url) for url in bins)
+
+
+def test_an_exon_and_a_square_combine(client):
+    """The two chart selections narrow each other instead of replacing each other,
+    and every link the charts offer then still matches a guide."""
+    response = wait_for_table(client, DESIGNS_URL)
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    exon = re.search(r'<a href="([^"]*)"><g class="exon"', selected.text)
+    assert exon, 'no exon holds the selected change'
+    both = client.get(html.unescape(exon.group(1)))
+    assert both.status_code == 200
+    assert 'title="Remove this filter">Exon ' in both.text
+    assert 'sub=' + sub in html.unescape(exon.group(1))
+    assert _matched(both.text)[0] > 0
+
+
+def test_a_square_matching_nothing_in_the_selected_exon_is_not_a_link(client):
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2')
+    cells = re.findall(r'(<a href="[^"]*">)?<g class="cell( empty)?">', response.text)
+    assert any(empty for _, empty in cells)
+    assert not any(link and empty for link, empty in cells)
+
+
+def test_links_land_where_the_click_is_answered(client):
+    """A reload lands on the map for a chart click and on the filters for anything
+    done to the table, rather than at the top of the page."""
+    response = wait_for_table(client, DESIGNS_URL)
+    text = response.text
+    assert 'id="coverage"' in text and 'id="results"' in text
+    assert re.search(r'href="/designs\?[^"]*exon=\d+#coverage"', text)
+    assert re.search(r'href="/designs\?[^"]*sub=[A-Za-z-]+#coverage"', text)
+    assert re.search(r'href="/designs\?[^"]*sort=[^"]*#results"', text)
+    assert 'action="/designs#results"' in text
+    # The downloads are files, not views, and carry no fragment.
+    assert not re.search(r'href="/designs/download[^"]*#', text)
+
+
 def test_a_substitution_this_editor_cannot_make_is_a_400(client):
     """Tryptophan to tryptophan needs no edit at all, so no guide makes it."""
     wait_for_table(client, DESIGNS_URL)
@@ -551,10 +595,38 @@ def test_a_chip_removes_only_its_own_filter(client):
     response = client.get(DESIGNS_URL + '&exon=2&mutation=Missense')
     chips = dict((label.strip(), html.unescape(url)) for url, label in re.findall(
         r'<a href="([^"]*)" title="Remove this filter">([^<]*)<', response.text))
-    assert set(chips) == {'Exon 2', 'Missense'}
+    category = 'Mutation category: Missense'
+    assert set(chips) == {'Exon 2', category}
     assert 'exon=' not in chips['Exon 2'] and 'mutation=Missense' in chips['Exon 2']
-    assert 'exon=2' in chips['Missense'] and 'mutation=' not in chips['Missense']
+    assert 'exon=2' in chips[category] and 'mutation=' not in chips[category]
     assert 'Clear all' in response.text
+
+
+def test_the_map_key_is_the_consequence_filter(client):
+    """Each class in the key links to exactly as many guides as it says it counts,
+    and there is no second list of consequences in the form. Guides with no edit
+    are not drawn, so theirs is the one entry without a swatch."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'name="mutation"' not in response.text
+    assert 'c-none' not in response.text
+    key = re.findall(r'<a href="([^"]*consequence=(\w+)[^"]*)"[^>]*>'
+                     r'(?:<i class="c-\w+"></i>)?([\d,]+) ', response.text)
+    assert {name for _, name, _ in key} >= {'mis', 'none'}
+    for url, name, count in key:
+        filtered = client.get(html.unescape(url))
+        assert re.search(r'<strong>%s of [\d,]+ guides match' % count, filtered.text), name
+        assert 'class="on" aria-current="true"' in filtered.text
+        assert '<input type="hidden" name="consequence" value="%s">' % name \
+            in filtered.text
+
+
+def test_a_mutation_link_still_filters_and_survives_the_form(client):
+    """The form no longer offers the engine's categories, but a link naming one
+    keeps working, and applying another filter does not drop it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&mutation=Missense')
+    assert 'guides match' in response.text
+    assert '<input type="hidden" name="mutation" value="Missense">' in response.text
 
 
 def test_a_single_edit_editor_offers_no_edit_dropdown(client):
@@ -566,8 +638,10 @@ def test_a_single_edit_editor_offers_no_edit_dropdown(client):
 def test_selecting_on_a_chart_leaves_its_caption_alone(client):
     """A selection that rewrote the caption would move the drawing under it."""
     def captions(text):
-        return re.findall(r'<figcaption>.*?</figcaption>', text,
-                          re.S)
+        # The consequence links carry the selection in their URLs, which the reader
+        # never sees, so only what is drawn is compared.
+        return [re.sub(r' href="[^"]*"', '', caption)
+                for caption in re.findall(r'<figcaption>.*?</figcaption>', text, re.S)]
 
     response = wait_for_table(client, DESIGNS_URL)
     sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)

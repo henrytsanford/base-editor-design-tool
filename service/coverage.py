@@ -28,8 +28,8 @@ import pandas as pd
 
 from bedesign.engine import get_aa_map
 
-from .results import (AA_COLUMN, MUTATION_COLUMN, POSITION_COLUMN, SIGNIFICANCE_COLUMN,
-                      STRAND_COLUMN, split_tokens)
+from .results import (AA_COLUMN, CLASS_LABELS, CLASS_RANK, CLASSES, POSITION_COLUMN,
+                      SIGNIFICANCE_COLUMN, STRAND_COLUMN, split_tokens)
 
 # How many bins the transcript is divided into. The map's shape count is bounded by
 # this and by the exon count, so a 35,991-residue gene draws about as much as a 393.
@@ -50,20 +50,8 @@ LABEL_GAP = 22        # how far apart exon numbers must be to both be drawn
 # drawing: enough to read as a break without costing the exons any width.
 STUB = 24
 
-# What a guide does, worst first. A guide is drawn as the most severe edit it makes,
-# so a guide that knocks out a splice site and also makes a silent change reads as
-# the knockout.
-CLASSES = ('lof', 'mis', 'sil', 'nc', 'none')
-CLASS_RANK = {name: i for i, name in enumerate(CLASSES)}
-CLASS_LABELS = {'lof': 'loss of function', 'mis': 'missense', 'sil': 'silent',
-                'nc': 'non-coding edit', 'none': 'no edit in window'}
-# The engine's categories, mapped onto them. Nonsense and a broken splice site are
-# both a dead protein, so they share a colour.
-CATEGORY_CLASS = {
-    'Nonsense': 'lof', 'Splice-donor': 'lof', 'Splice-acceptor': 'lof',
-    'Missense': 'mis', 'Silent': 'sil',
-    'UTR': 'nc', 'Intron': 'nc', 'Flanking': 'nc',
-}
+# The consequence class the map does not stack: a guide with no edit in its window.
+UNDRAWN = 'none'
 
 # ClinVar classifications that make a guide worth flagging on the map.
 PATHOGENIC = frozenset(['Pathogenic', 'Likely pathogenic',
@@ -247,18 +235,33 @@ class Coverage(object):
     """The two panels, and the masks that let the table answer to them."""
 
     def __init__(self, table, geometry):
-        """Built over a ResultTable, whose own MUTATION_COLUMN masks are reused so
-        the column is split once per result."""
+        """Built over a ResultTable, whose own consequence classes are reused so
+        the map and the filter cannot count a guide differently."""
         self.geometry = geometry
         self.total = table.total
-        self._scan(table.frame, table.token_masks(MUTATION_COLUMN))
+        self._scan(table.frame, table.row_classes)
         self.matrix_counts = {key: len(rows)
                               for key, rows in self._substitution_rows.items()}
-        drawn = self._row_exons[self._row_exons >= 0]
-        self.exon_guides = np.bincount(drawn, minlength=len(geometry.exons))
+        n_exons = len(geometry.exons)
+        drawn = self._row_exons >= 0
+        per_bin = np.bincount(self._row_bins[drawn] * n_exons + self._row_exons[drawn],
+                              minlength=BINS * n_exons).reshape(BINS, n_exons)
+        self.exon_guides = per_bin.sum(axis=0)
+        # The exon each bin's click filters to, numbered from 1 as the exon filter
+        # takes it: the one most of its guides sit in, since a bin at a splice
+        # junction can straddle two. 0 for an empty bin.
+        self.bin_exons = (np.where(per_bin.any(axis=1), per_bin.argmax(axis=1), -1)
+                          + 1).tolist()
+        # How many of each substitution's guides every exon holds, so either chart
+        # selection can mark the pairs with the other that would match nothing.
+        self._substitution_exons = {}
+        for key, rows in self._substitution_rows.items():
+            exons_of = self._row_exons[rows]
+            self._substitution_exons[key] = np.bincount(exons_of[exons_of >= 0],
+                                                        minlength=n_exons)
         self.peak = max(int(self._bins.sum(axis=2).max()), 1)
 
-    def _scan(self, frame, category_masks):
+    def _scan(self, frame, worst):
         """One pass over the frame, filling both panels.
 
         Read column by column as numpy arrays rather than row by row: on TTN's 25,662
@@ -280,22 +283,18 @@ class Coverage(object):
                                  0, BINS - 1)
         self._row_exons = np.where(drawable, exons, -1).astype(np.int32)
 
-        # Each row's worst class, as a rank into CLASSES: every category lowers the
-        # rank of the rows carrying it to its own class's, if that is worse.
-        worst = np.full(self.total, CLASS_RANK['none'], dtype=np.int32)
-        for category, mask in category_masks.items():
-            rank = CLASS_RANK[CATEGORY_CLASS.get(category, 'nc')]
-            worst[mask] = np.minimum(worst[mask], rank)
         # Kept per row so a selected substitution's guides can be lifted out of the
         # stacks they were counted into.
         self._row_sides = (~senses).astype(np.int32)
         self._row_classes = worst
-        # Counts per (bin, strand side, class), sense above the line as side 0.
+        # Counts per (bin, strand side, class), sense above the line as side 0. A
+        # guide that edits nothing has no consequence to draw, so it is left off the
+        # stacks; the legend still counts it and the table still lists it.
+        stacked = drawable & (worst != CLASS_RANK[UNDRAWN])
         cell = ((self._row_bins * 2 + self._row_sides) * len(CLASSES)
-                + worst)[drawable]
+                + worst)[stacked]
         self._bins = np.bincount(cell, minlength=BINS * 2 * len(CLASSES)).reshape(
             BINS, 2, len(CLASSES))
-        self.class_counts = dict(zip(CLASSES, self._bins.sum(axis=(0, 1)).tolist()))
 
         substitution_rows, sites = defaultdict(list), defaultdict(set)
         self.matrix_pathogenic = defaultdict(int)
@@ -341,8 +340,11 @@ class Coverage(object):
 
     # ---- what the template draws ---------------------------------------------
 
-    def map_view(self, selected_exon=0, selected_substitution=''):
+    def map_view(self, selected_exon=0, selected_substitution='', consequence=''):
         """The gene map: exon blocks and binned guide stacks.
+
+        With a `consequence` selected, every segment of another class is marked `dim`,
+        and a bin holding none of that class is marked `dim` whole.
 
         With a substitution selected, the guides making it are drawn as their own
         segment next to the track, in the colour of the square that was clicked, and
@@ -354,6 +356,10 @@ class Coverage(object):
         geometry = self.geometry
         scale = (WIDTH - 2 * MARGIN) / geometry.width
         bin_width = (WIDTH - 2 * MARGIN) / BINS
+        # With a substitution selected, how many of its guides each exon holds: an
+        # exon holding none would filter the table to nothing, so it is marked
+        # `empty` and the page offers no link off it.
+        exon_picked = self._substitution_exons.get(selected_substitution)
         exons = []
         last_label = -LABEL_GAP
         for index, (low, high) in enumerate(geometry.exons):
@@ -379,16 +385,19 @@ class Coverage(object):
             if centre - last_label >= LABEL_GAP:
                 label, last_label = str(index + 1), centre
             count = int(self.exon_guides[index])
+            empty = exon_picked is not None and not exon_picked[index]
             exons.append({
                 'number': index + 1,
                 'blocks': blocks,
                 'label': label,
                 'label_x': round(centre, 2),
                 'selected': selected_exon == index + 1,
-                'title': 'Exon %d · %d bp%s · %s' % (
+                'empty': empty,
+                'title': 'Exon %d · %d bp%s · %s%s' % (
                     index + 1, high - low + 1,
                     '' if coding_pieces else ' (untranslated)',
-                    plural(count, 'guide')),
+                    plural(count, 'guide'),
+                    ' · none make the selected change' if empty else ''),
             })
 
         # The selected guides per (bin, side), and the same guides per (bin, side,
@@ -396,6 +405,9 @@ class Coverage(object):
         picked = removed = None
         if selected_substitution in self._substitution_rows:
             rows = self._substitution_rows[selected_substitution]
+            # With a consequence selected too, only the guides both filters keep.
+            if consequence:
+                rows = rows[self._row_classes[rows] == CLASS_RANK[consequence]]
             picked_class = square_class(*selected_substitution.split('-'))
             picked_letters = self.selection(selected_substitution)['letters']
             where = (self._row_bins[rows], self._row_sides[rows])
@@ -415,7 +427,8 @@ class Coverage(object):
             segments = []
             for side, counts in enumerate(sides):
                 if picked is None:
-                    stack = [(name, value, False) for name, value in zip(CLASSES, counts)]
+                    stack = [(name, value, bool(consequence) and name != consequence)
+                             for name, value in zip(CLASSES, counts)]
                 else:
                     stack = [(picked_class, int(picked[index, side]), False)] + [
                         (name, value - int(removed[index, side, rank]), True)
@@ -436,7 +449,8 @@ class Coverage(object):
                 'x': round(x, 2),
                 'bar_x': bar_x,
                 'segments': segments,
-                'dim': picked is not None and not hits,
+                'dim': all(segment['dim'] for segment in segments),
+                'exon': self.bin_exons[index],
                 'title': '%s: %s%s' % (
                     plural(total, 'guide'),
                     ', '.join('%d %s' % (n, CLASS_LABELS[c])
@@ -444,8 +458,6 @@ class Coverage(object):
                     ' · %d make %s' % (hits, picked_letters) if hits else ''),
             })
 
-        counts = [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
-                  for name, count in self.class_counts.items() if count]
         return {'exons': exons, 'bins': bins,
                 'width': WIDTH, 'height': HEIGHT,
                 'bin_width': round(bin_width, 2), 'bar_width': bar_width,
@@ -453,10 +465,14 @@ class Coverage(object):
                 # this, whatever the drawing's height.
                 'band_top': MIDLINE - TRACK - BAR_MAX,
                 'band_height': 2 * (TRACK + BAR_MAX),
-                'midline': MIDLINE, 'margin': MARGIN, 'counts': counts}
+                'midline': MIDLINE, 'margin': MARGIN}
 
-    def matrix_view(self, selected=''):
-        """The substitution matrix: 441 squares, whatever the gene."""
+    def matrix_view(self, selected='', exon=0):
+        """The substitution matrix: 441 squares, whatever the gene.
+
+        With an exon selected, a square none of whose guides sit in that exon is
+        marked `empty`: the two selections combine, and that pair matches nothing.
+        """
         # The scale spans the squares that change the residue. Silent ones sit on it
         # too but are left out of its range, so a large synonymous count does not
         # wash out the rest; past the top they are simply drawn solid.
@@ -469,6 +485,7 @@ class Coverage(object):
                 key = substitution_key(source, target)
                 count = self.matrix_counts.get(key, 0)
                 shade = None
+                empty = bool(count and exon) and not self._substitution_exons[key][exon - 1]
                 if count:
                     cls = square_class(source, target)
                     present.add(cls)
@@ -476,11 +493,12 @@ class Coverage(object):
                                     if high > low else 1.0)
                     sites = self.matrix_sites[key]
                     pathogenic = self.matrix_pathogenic.get(key, 0)
-                    title = '%s to %s · %s at %s%s' % (
+                    title = '%s to %s · %s at %s%s%s' % (
                         ONE_LETTER[source], ONE_LETTER[target],
                         plural(count, 'guide'), plural(sites, 'site'),
                         ' · %d recreate a pathogenic variant' % pathogenic
-                        if pathogenic else '')
+                        if pathogenic else '',
+                        ' · none in exon %d' % exon if empty else '')
                 else:
                     cls, title = 'off', '%s to %s · not reachable with this editor' % (
                         ONE_LETTER[source], ONE_LETTER[target])
@@ -492,6 +510,7 @@ class Coverage(object):
                     'cls': cls,
                     'opacity': shade,
                     'selected': selected == key,
+                    'empty': empty,
                     'title': title,
                 })
 
