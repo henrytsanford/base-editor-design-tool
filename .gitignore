@@ -26,3 +26,7 @@ CLAUDE.md
 
 # Finished designs written by the web service (RESULTS_DIR)
 results/
+
+# Firebase CLI deploy cache and logs
+.firebase/
+firebase-debug.log

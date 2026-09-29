@@ -91,6 +91,25 @@ Set a billing budget alert. A new deploy is opened to the public with:
     gcloud run services add-iam-policy-binding bedesign --region "$REGION" \
         --member=allUsers --role=roles/run.invoker
 
+## Public URL
+
+Firebase Hosting serves `https://bedesigner.web.app` in front of the Cloud Run service.
+`deploy/firebase/` holds its config: every path is rewritten to `bedesign` in
+`us-central1`, and `public/` is empty so no static file can shadow a route. The rewrite
+names the service, not a revision, so deploying a new image needs no Hosting deploy.
+Changing the config does:
+
+    cd deploy/firebase && firebase deploy --only hosting
+
+The standalone CLI (`curl -fsSL -o firebase https://firebase.tools/bin/macos/latest`)
+avoids a Node install. Responses come back `Cache-Control: private`, so Hosting's CDN
+passes every request through instead of caching pages. The `*.run.app` URL still answers
+directly.
+
+Hosting is one more proxy in front of Cloud Run, so the `X-Forwarded-For` chain differs
+between the two URLs, and a single `TRUSTED_PROXY_HOPS` can be right for only one of
+them. Measure both before changing it.
+
 ## Deploying a change
 
 Rebuild both images as above and redeploy the new tag; the data and the code move

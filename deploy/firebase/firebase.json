@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "bedesigner",
+    "public": "public",
+    "ignore": ["**/.*"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {"serviceId": "bedesign", "region": "us-central1"}
+      }
+    ]
+  }
+}
