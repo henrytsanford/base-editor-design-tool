@@ -1,0 +1,55 @@
+{# The gene map, full width above the matrix and the filters. Plain SVG with no
+   script: every clickable thing is an <a> carrying the same query string the filter
+   form builds, so a view of the chart is a link like any other view. #}
+<figure class="panel map" id="{{ coverage_anchor }}">
+  <figcaption>
+    <h2>Guide coverage</h2>
+    {# The captions read the same whatever is selected, so selecting never moves
+       the drawing under the pointer. The selection is said in the filter form.
+       Only what the drawing cannot say for itself: the strands are labelled on the
+       SVG, and the shortening is the one thing a reader would otherwise misread. #}
+    <p class="muted">Introns and UTRs shortened to the {{ params.intron_buffer }} bp either side a
+    guide can reach. Each guide is counted once, by its most severe edit; guides with
+    no edit in their window are left off. Click a
+    consequence, an exon or its guides to filter the table.</p>
+    {# The legend carries each class's count, so the colours and the tally are one
+       thing to read rather than the same five labels written out twice, and it is
+       the consequence filter, so there is no second list of them in the form. #}
+    <ul class="key">
+      <li class="total">{{ '{:,}'.format(total) }} guides</li>
+      {% include "_consequences.html" %}
+      {# Always laid out, only hidden, so the key cannot wrap onto a new line
+         and push the map down when a square is picked. #}
+      <li{% if not view.sub %} class="off" aria-hidden="true"{% endif %}><span class="note">faded: no guide makes the selected change</span></li>
+    </ul>
+  </figcaption>
+  <svg class="viz gene" viewBox="0 0 {{ map.width }} {{ map.height }}" role="img"
+       aria-label="Guides along {{ transcript_id }}, by position and consequence">
+    <text x="{{ map.margin }}" y="11">sense &uarr;</text>
+    <text x="{{ map.margin }}" y="{{ map.height - 3 }}">antisense &darr;</text>
+    <line class="spine" x1="{{ map.margin }}" x2="{{ map.width - map.margin }}"
+          y1="{{ map.midline }}" y2="{{ map.midline }}"/>
+    {# A bin is a link to the exon most of its guides sit in: the bars are what
+       the eye lands on, so they have to answer a click the way the exon does. #}
+    {% for bin in map.bins %}
+    {% if bin.url %}<a href="{{ bin.url }}">{% endif %}<g class="bin{{ ' dim' if bin.dim else '' }}"><title>{{ bin.title }}{% if bin.url %}{{ ' - showing only exon %d' % bin.exon if bin.selected else ' - click to filter to exon %d' % bin.exon }}{% endif %}</title>
+      {% for seg in bin.segments %}<rect class="c-{{ seg.cls }}{{ ' dim' if seg.dim else '' }}" x="{{ bin.bar_x }}" y="{{ seg.y }}" width="{{ map.bar_width }}" height="{{ seg.height }}"/>{% endfor %}
+      <rect class="hit" x="{{ bin.x }}" y="{{ map.band_top }}" width="{{ map.bin_width }}" height="{{ map.band_height }}"/>
+    </g>{% if bin.url %}</a>{% endif %}
+    {% endfor %}
+    {# Exons go above the bins: each bin's hover target spans
+       the full chart height, so drawn later it would take the exon's click. #}
+    {% for exon in map.exons %}
+    {# An exon that holds none of the selected change's guides would filter the
+       table to nothing, so it is faded and not a link. #}
+    {% if exon.url %}<a href="{{ exon.url }}">{% endif %}<g class="exon{{ ' on' if exon.selected else '' }}{{ ' empty' if exon.empty else '' }}"><title>{{ exon.title }}{% if exon.url %}{{ ' - showing only these' if exon.selected else ' - click to filter' }}{% endif %}</title>
+      {% for block in exon.blocks %}<rect x="{{ block.x }}" y="{{ block.y }}" width="{{ block.width }}" height="{{ block.height }}" rx="1"/>{% endfor %}
+    </g>{% if exon.url %}</a>{% endif %}
+    {% endfor %}
+    {% for exon in map.exons if exon.label %}
+    <text class="exl" x="{{ exon.label_x }}" y="{{ map.midline + 3 }}">{{ exon.label }}</text>
+    {% endfor %}
+    <text x="{{ map.margin }}" y="{{ map.midline - 18 }}">5&prime;</text>
+    <text class="end" x="{{ map.width - map.margin }}" y="{{ map.midline - 18 }}">3&prime;</text>
+  </svg>
+</figure>

@@ -1,0 +1,52 @@
+{# The substitution matrix, folded under the gene map. Plain SVG with no script, the
+   same as the map: each square is a link, except one making no guide in the selected
+   exon, which is faded instead. The same editor fills the same squares in
+   every transcript, so it is closed until wanted, and open whenever a square is
+   selected, since that selection is what the map is then showing. #}
+<details class="panel matrix"{{ ' open' if view.sub else '' }}>
+<summary><h2>Residue changes</h2>
+<span class="muted">{{ matrix.cells|selectattr('count')|list|length }} possible with this editor</span></summary>
+<figure>
+  <figcaption>
+    <p class="muted">Click a square to filter the table and mark those guides on the map.</p>
+    {# Hue is the map's: what the change does. Opacity is how many guides make it,
+       drawn as a row of steps in ink so it cannot be mistaken for a fourth class. #}
+    <ul class="key">
+      {% for entry in matrix.classes %}
+      <li><i class="c-{{ entry.cls }}"></i>{{ entry.label }}</li>
+      {% endfor %}
+      {% if matrix.shaded %}<li class="steps">{{ matrix.low }}
+        <svg viewBox="0 0 {{ matrix.steps|length * 12 }} 11" width="{{ matrix.steps|length * 12 - 1 }}" height="11" aria-hidden="true">
+          {% for step in matrix.steps %}<rect x="{{ loop.index0 * 12 }}" width="11" height="11" rx="2" fill-opacity="{{ step }}"/>{% endfor %}
+        </svg>
+        {{ matrix.high }} guides</li>{% endif %}
+    </ul>
+  </figcaption>
+  <svg class="viz mtx" viewBox="0 0 {{ matrix.width }} {{ matrix.height }}" role="img"
+       aria-label="Residue substitutions reachable with this editor">
+    {% for cell in matrix.cells %}
+    {% if cell.url %}<a href="{{ cell.url }}">{% endif %}<g class="cell{{ ' on' if cell.selected else '' }}{{ ' empty' if cell.empty else '' }}"><title>{{ cell.title }}</title><rect class="c-{{ cell.cls }}" x="{{ cell.x }}" y="{{ cell.y }}" width="{{ matrix.cell }}" height="{{ matrix.cell }}"{% if cell.opacity %} fill-opacity="{{ cell.opacity }}"{% endif %}/></g>{% if cell.url %}</a>{% endif %}
+    {% endfor %}
+    {% for rule in matrix.rules %}
+    <line class="sep" x1="{{ matrix.left + rule * matrix.cell }}" x2="{{ matrix.left + rule * matrix.cell }}" y1="{{ matrix.top }}" y2="{{ matrix.top + matrix.size }}"/>
+    <line class="sep" x1="{{ matrix.left }}" x2="{{ matrix.left + matrix.size }}" y1="{{ matrix.top + rule * matrix.cell }}" y2="{{ matrix.top + rule * matrix.cell }}"/>
+    {% endfor %}
+    <rect class="frame" x="{{ matrix.left }}" y="{{ matrix.top }}" width="{{ matrix.size }}" height="{{ matrix.size }}"/>
+    {% for label in matrix.labels %}{% set index = loop.index0 %}
+    <text class="rl" x="{{ matrix.left - 6 }}" y="{{ matrix.top + index * matrix.cell + matrix.cell / 2 + 4 }}">{{ label }}</text>
+    {# A label longer than a letter is turned on its side to fit its column. #}
+    {% if label|length > 1 %}
+    <text class="cl rot" transform="translate({{ matrix.left + index * matrix.cell + matrix.cell / 2 + 4 }},{{ matrix.top + matrix.size + 8 }}) rotate(-90)">{{ label }}</text>
+    {% else %}
+    <text class="cl" x="{{ matrix.left + index * matrix.cell + matrix.cell / 2 }}" y="{{ matrix.top + matrix.size + 16 }}">{{ label }}</text>
+    {% endif %}
+    {% endfor %}
+    {% for group in matrix.groups %}
+    <text class="gl" x="{{ matrix.left - 26 }}" y="{{ matrix.top + group.centre * matrix.cell + 4 }}">{{ group.name }}</text>
+    <text class="gl mid" x="{{ matrix.left + group.centre * matrix.cell }}" y="{{ matrix.top + matrix.size + 38 }}">{{ group.name }}</text>
+    {% endfor %}
+    <text class="ax" transform="translate(14,{{ matrix.top + matrix.size / 2 }}) rotate(-90)">Initial residue</text>
+    <text class="ax" x="{{ matrix.left + matrix.size / 2 }}" y="{{ matrix.height - 6 }}">Resulting residue</text>
+  </svg>
+</figure>
+</details>

@@ -30,6 +30,9 @@ ROWS_PER_PAGE = 50
 
 MUTATION_COLUMN = 'Mutation category'
 SIGNIFICANCE_COLUMN = 'Clinical significance'
+POSITION_COLUMN = 'sgrna genomic position'
+STRAND_COLUMN = 'sgRNA Strand'
+AA_COLUMN = 'Amino acid edits'
 # The two ';'-joined columns, the only ones filtered by token.
 TOKEN_COLUMNS = (MUTATION_COLUMN, SIGNIFICANCE_COLUMN)
 
@@ -44,13 +47,29 @@ ANY_MATCH = 'any-match'
 # Filtered by an exact value rather than by a token. Two distinct values each, so
 # masking them once per parse costs almost nothing and takes the elementwise string
 # comparison off every filtered request.
-VALUE_COLUMNS = ('Edit', 'sgRNA Strand', 'BsmBI flag', '4T flag')
+VALUE_COLUMNS = ('Edit', STRAND_COLUMN, 'BsmBI flag', '4T flag')
 
 # Sorted as numbers. Every cell is a string, so without this '10' sorts before '9'.
-NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', 'sgrna genomic position'])
+NUMERIC_COLUMNS = frozenset(['# edits', '#silent edits', POSITION_COLUMN])
 
 # The flag columns hold 'yes' or the empty string -- never 'no'.
 FLAG_YES = 'yes'
+
+# What a guide does, worst first: the one vocabulary the page uses for consequence,
+# on the map, in its legend and as the filter. A guide is counted as the most severe
+# edit it makes, so a guide that knocks out a splice site and also makes a silent
+# change is a loss of function, and each guide sits in exactly one class.
+CLASSES = ('lof', 'mis', 'sil', 'nc', 'none')
+CLASS_RANK = {name: i for i, name in enumerate(CLASSES)}
+CLASS_LABELS = {'lof': 'loss of function', 'mis': 'missense', 'sil': 'silent',
+                'nc': 'non-coding edit', 'none': 'no edit in window'}
+# The engine's categories, mapped onto them. Nonsense and a broken splice site are
+# both a dead protein, so they share a class.
+CATEGORY_CLASS = {
+    'Nonsense': 'lof', 'Splice-donor': 'lof', 'Splice-acceptor': 'lof',
+    'Missense': 'mis', 'Silent': 'sil',
+    'UTR': 'nc', 'Intron': 'nc', 'Flanking': 'nc',
+}
 
 
 class UnknownFilterValue(ValueError):
@@ -80,6 +99,11 @@ def _masks_from(positions, length):
     return masks
 
 
+def split_tokens(cell):
+    """The entries of one ';'-joined cell, which ends in a trailing ';'."""
+    return [token for token in cell.split(';') if token] if cell else []
+
+
 def _token_masks(values):
     """Boolean masks, one per token appearing in a ';'-joined column.
 
@@ -89,11 +113,8 @@ def _token_masks(values):
     """
     positions = {}
     for row, cell in enumerate(values):
-        if not cell:
-            continue
-        for token in cell.split(';'):
-            if token:
-                positions.setdefault(token, []).append(row)
+        for token in split_tokens(cell):
+            positions.setdefault(token, []).append(row)
     return _masks_from(positions, len(values))
 
 
@@ -127,6 +148,12 @@ class ResultTable(object):
             (column, _value_masks(self.frame[column].to_numpy()))
             for column in VALUE_COLUMNS if column in self.frame.columns)
         self._any_match = self._compute_any_match()
+        self.row_classes = self._compute_classes()
+        # The coverage panels, attached after construction by whoever has the
+        # transcript's geometry -- this class only ever sees the designs file. None
+        # when the bundle could not answer for the transcript, in which case the page
+        # renders its table without the drawings above it.
+        self.coverage = None
 
     def _compute_any_match(self):
         """Rows carrying at least one real ClinVar classification."""
@@ -136,6 +163,15 @@ class ResultTable(object):
             if token != NO_MATCH:
                 found |= mask
         return found
+
+    def _compute_classes(self):
+        """Each row's worst class, as a rank into CLASSES: every category lowers the
+        rank of the rows carrying it to its own class's, if that is worse."""
+        worst = np.full(self.total, CLASS_RANK['none'], dtype=np.int32)
+        for category, mask in self._masks.get(MUTATION_COLUMN, {}).items():
+            rank = CLASS_RANK[CATEGORY_CLASS.get(category, 'nc')]
+            worst[mask] = np.minimum(worst[mask], rank)
+        return worst
 
     def facets(self):
         """The filter vocabularies present in *this* result, with row counts.
@@ -148,10 +184,17 @@ class ResultTable(object):
             return sorted((token, int(mask.sum()))
                           for token, mask in masks.items() if token not in skip)
 
+        counts = np.bincount(self.row_classes, minlength=len(CLASSES)).tolist()
         return {
-            'mutation': counted(MUTATION_COLUMN),
+            # Worst first, and only the classes this result contains: a zero has
+            # nothing to point at.
+            'consequence': [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
+                            for name, count in zip(CLASSES, counts) if count],
             'significance': counted(SIGNIFICANCE_COLUMN, skip=(NO_MATCH,)),
             'any_match': int(self._any_match.sum()),
+            # Which edits the result holds. Most editors make one, and a dropdown
+            # with a single choice is not a choice.
+            'edits': sorted(self._masks.get('Edit', {})),
         }
 
     def _token_mask(self, column, token):
@@ -176,6 +219,8 @@ class ResultTable(object):
         def keep(other):
             return other if mask is None else (mask & other)
 
+        if view.consequence:
+            mask = keep(self.row_classes == CLASS_RANK[view.consequence])
         if view.mutation:
             mask = keep(self._token_mask(MUTATION_COLUMN, view.mutation))
         if view.significance:
@@ -186,11 +231,22 @@ class ResultTable(object):
         if view.deaminase:
             mask = keep(self._value_mask('Edit', view.deaminase))
         if view.strand:
-            mask = keep(self._value_mask('sgRNA Strand', view.strand))
+            mask = keep(self._value_mask(STRAND_COLUMN, view.strand))
         if view.hide_bsmbi:
             mask = keep(~self._value_mask('BsmBI flag', FLAG_YES))
         if view.hide_4t:
             mask = keep(~self._value_mask('4T flag', FLAG_YES))
+        # The two coverage filters. Both name something the drawing offered, so a
+        # value this result does not contain is a mistake worth reporting rather than
+        # an empty table: without the panels there is nothing to have clicked.
+        if view.exon:
+            if self.coverage is None or not self.coverage.has_exon(view.exon):
+                raise UnknownFilterValue('exon %d' % view.exon)
+            mask = keep(self.coverage.exon_mask(view.exon))
+        if view.sub:
+            if self.coverage is None or not self.coverage.has_substitution(view.sub):
+                raise UnknownFilterValue(view.sub.replace('-', ' to '))
+            mask = keep(self.coverage.substitution_mask(view.sub))
         return mask
 
     def _ordered(self, positions, view):

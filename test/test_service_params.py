@@ -158,6 +158,7 @@ def test_view_defaults_show_the_unfiltered_first_page():
 
 def test_any_filter_marks_the_view_as_filtered():
     assert view('mutation=Missense').filtered
+    assert view('consequence=mis').filtered
     assert view('hide_4t=true').filtered
     assert not view('sort=PAM&page=2').filtered, 'sorting is not filtering'
 
@@ -175,7 +176,10 @@ def test_sort_must_name_a_column_of_the_table():
     'page=0',
     'page=nine',
     'mutation=<script>',
+    'consequence=Missense',
     'hide_4t=perhaps',
+    'exon=0',
+    'sub=drop table',
 ])
 def test_a_bad_view_value_is_refused(query):
     with pytest.raises(ValidationError):
@@ -193,6 +197,12 @@ def test_an_open_vocabulary_filter_is_checked_for_shape_only():
     assert view('significance=Benign/Likely benign').significance == \
         'Benign/Likely benign'
     assert view('significance=Conflicting classifications of pathogenicity')
+
+
+def test_exon_and_substitution_survive_the_query_string():
+    parsed = view('exon=3&sub=glu-gly')
+    assert (parsed.exon, parsed.sub) == (3, 'Glu-Gly')
+    assert parsed.filtered
 
 
 def test_a_blank_field_means_the_user_left_it_alone():

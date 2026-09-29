@@ -1,6 +1,6 @@
 {# The results grid. Its own file so the header cells and the rows have one
    definition, whatever page renders them. #}
-{% if result.rows %}
+{% if rows %}
 <div class="scroll">
 <table>
 <thead><tr>
@@ -9,7 +9,7 @@
 {% endfor %}
 </tr></thead>
 <tbody>
-{% for row in result.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+{% for row in rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
 </tbody>
 </table>
 </div>

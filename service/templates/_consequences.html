@@ -1,0 +1,8 @@
+{# The consequence classes as legend entries, each a link that filters the table to
+   it. One set of words and counts for the map, the filter and its chip: a class's
+   count is the number of rows its link returns. Guides with no edit in their window
+   are not drawn on the map, so their entry has no swatch to match. #}
+{% for entry in consequences %}
+<li><a href="{{ entry.url }}"{% if entry.selected %} class="on" aria-current="true"{% endif %}
+       title="{{ 'Showing only these - click to show all' if entry.selected else 'Show only these guides' }}">{% if entry.cls != 'none' %}<i class="c-{{ entry.cls }}"></i>{% endif %}{{ '{:,}'.format(entry.count) }} {{ entry.label }}</a></li>
+{% endfor %}

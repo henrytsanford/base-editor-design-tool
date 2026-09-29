@@ -26,8 +26,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from bedesign import DESIGN_COLUMNS, ENGINE_VERSION
-from bedesign.engine import ALL_EDITS, BE_TYPES, DEFAULT_BE_TYPE, DesignParams
+from bedesign.engine import BE_TYPES, DEFAULT_BE_TYPE, DesignParams
 
+from . import coverage
 from .cachekey import (MANIFEST, RESULT_FILES, RESULTS, cache_key, manifest_key,
                        result_key)
 from .config import Settings
@@ -38,7 +39,8 @@ from .params import (DESIGN_PARAMS, DOWNLOAD_PARAMS, EDITOR_ALL, EDITS, GENE_PAR
                      parse_genes_query, parse_view_query)
 from .ratelimit import TokenBucket, client_ip
 from .references import GENE_LIMIT, References
-from .results import ANY_MATCH, ResultCache, ResultTable, UnknownFilterValue
+from .results import (ANY_MATCH, CLASS_LABELS, ResultCache, ResultTable,
+                      UnknownFilterValue)
 from .storage import LocalStorage
 
 log = logging.getLogger(__name__)
@@ -47,6 +49,11 @@ TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), 't
 
 # How often the running page re-checks. Design doc 3 says 3 seconds.
 POLL_SECONDS = 3
+# Where a reloaded table page lands: the filter bar for anything done to the table,
+# the gene map for a click on either chart. Without them every click, applied filter
+# and page turn would reload scrolled back to the heading.
+RESULTS_ANCHOR = 'results'
+COVERAGE_ANCHOR = 'coverage'
 
 # The order parameters appear in a URL we build. Fixed, so the same view always has
 # the same link and two people comparing URLs see the same string.
@@ -90,12 +97,13 @@ def values_of(query):
     return {name: query[name] for name in query.keys()}
 
 
-def build_url(path, values, order, **overrides):
+def build_url(path, values, order, fragment=None, **overrides):
     """A link to `path` carrying these parameters, with some changed.
 
     Names outside `order` are dropped rather than passed through, which is how a
     download link sheds the filters and a transcript link sheds the search box.
     Empty and false values are omitted so an unset filter leaves no trace in the URL.
+    A `fragment` names the element the loaded page scrolls to.
     """
     merged = dict(values)
     merged.update(overrides)
@@ -105,7 +113,8 @@ def build_url(path, values, order, **overrides):
         if value is None or value == '' or value is False:
             continue
         items.append((name, 'true' if value is True else str(value)))
-    return '%s?%s' % (path, urlencode(items))
+    url = '%s?%s' % (path, urlencode(items))
+    return '%s#%s' % (url, fragment) if fragment else url
 
 
 def create_app(settings=None):
@@ -223,13 +232,16 @@ def create_app(settings=None):
 
         key = cache_key(transcript_id, params, references.release,
                         references.clinvar_version, ENGINE_VERSION)
+        gene = references.gene_name(transcript_id)
+        heading = '%s %s' % (gene, transcript_id) if gene else transcript_id
 
         manifest = _manifest(app.state.storage, key)
         if manifest is not None and manifest.get('designs', 0) > settings.table_max_rows:
-            return _download_only(request, transcript_id, params, manifest)
+            return _download_only(request, heading, params, manifest)
         if manifest is not None:
             try:
-                return _table(request, key, transcript_id, params, view, manifest)
+                return _table(request, key, transcript_id, heading, params, view,
+                              manifest)
             except UnknownFilterValue as e:
                 return bad_request(
                     request, 'No guide in this result is annotated %s.' % e)
@@ -263,7 +275,7 @@ def create_app(settings=None):
             if started:
                 log.info('started %s for %s', key[:12], scrub(transcript_id))
 
-        return page(request, 'running.html', transcript_id=transcript_id)
+        return page(request, 'running.html', heading=heading)
 
     @app.get('/designs/download')
     def download(request: Request):
@@ -305,25 +317,43 @@ def create_app(settings=None):
         response.headers['Retry-After'] = str(POLL_SECONDS)
         return response
 
-    def _table(request, key, transcript_id, params, view, manifest):
+    def _table(request, key, transcript_id, heading, params, view, manifest):
         storage = app.state.storage
+        references = app.state.references
 
         def load():
-            return ResultTable(storage.get(result_key(key, 'designs')),
-                               DESIGN_COLUMNS)
+            # The coverage panels are built inside the cached load, so they are
+            # computed once per result and share the dedupe that keeps two
+            # simultaneous misses from parsing the same frame twice.
+            table = ResultTable(storage.get(result_key(key, 'designs')),
+                                DESIGN_COLUMNS)
+            shape = references.geometry(transcript_id)
+            if shape is not None and shape['exons']:
+                table.coverage = coverage.Coverage(
+                    table,
+                    coverage.Geometry(shape['exons'], shape['cds'], shape['strand'],
+                                      params.intron_buffer))
+            return table
 
         table = app.state.tables.get(key, load)
         result = table.select(view)
         values = values_of(request.query_params)
 
-        def designs_url(**overrides):
+        def designs_url(anchor=RESULTS_ANCHOR, **overrides):
             # Any change to what is shown returns to the first page: page 4 of a
             # freshly filtered table is usually not where the user wanted to land.
+            # The fragment lands the reloaded page where the click was answered
+            # rather than back at the top.
             overrides.setdefault('page', None)
-            return build_url('/designs', values, DESIGNS_ORDER, **overrides)
+            return build_url('/designs', values, DESIGNS_ORDER, fragment=anchor,
+                             **overrides)
 
+        # The page shows TABLE_COLUMNS, in that order; the download keeps them all.
+        shown = [table.columns.index(column) for column in TABLE_COLUMNS
+                 if column in table.columns]
+        rows = [[row[index] for index in shown] for row in result.rows]
         columns = []
-        for column in table.columns:
+        for column in (table.columns[index] for index in shown):
             current = view.dir if view.sort == column else ''
             columns.append({
                 'name': column,
@@ -340,45 +370,153 @@ def create_app(settings=None):
                     if result.page < result.pages else '',
         }
 
+        # The panels, and the links that come off them. An exon and a substitution
+        # combine, so "this change, in this exon" is two clicks; clicking a selected
+        # one again drops it alone. A pair that would match nothing is marked
+        # `empty` by the panel and gets no link, so the charts cannot build an
+        # empty table. Chart links land on the map, so both charts stay in view.
+        map_view = matrix_view = selection = None
+        if table.coverage is not None:
+            map_view = table.coverage.map_view(view.exon, view.sub, view.consequence)
+            matrix_view = table.coverage.matrix_view(view.sub, view.exon)
+            for exon in map_view['exons']:
+                if exon['selected'] or not exon['empty']:
+                    exon['url'] = designs_url(
+                        anchor=COVERAGE_ANCHOR,
+                        exon=None if exon['selected'] else exon['number'])
+            # A bin filters to the exon most of its guides sit in.
+            for bin_ in map_view['bins']:
+                exon = map_view['exons'][bin_['exon'] - 1] if bin_['exon'] else None
+                if exon and 'url' in exon:
+                    bin_['url'] = exon['url']
+                    bin_['selected'] = exon['selected']
+            for cell in matrix_view['cells']:
+                if cell['count'] and (cell['selected'] or not cell['empty']):
+                    cell['url'] = designs_url(
+                        anchor=COVERAGE_ANCHOR,
+                        sub=None if cell['selected'] else cell['key'])
+            if view.sub:
+                selection = table.coverage.selection(view.sub)
+
+        # The consequence key: each class a link that filters to it or, clicked
+        # again, drops it. It is the map's legend, so it lands on the map like the
+        # other chart clicks; with no map it sits in the filter bar instead.
+        facets = table.facets()
+        consequences = [dict(entry, selected=view.consequence == entry['cls'],
+                             url=designs_url(
+                                 anchor=COVERAGE_ANCHOR if map_view else RESULTS_ANCHOR,
+                                 consequence=None if view.consequence == entry['cls']
+                                 else entry['cls']))
+                        for entry in facets['consequence']]
+
+        # Every filter in force, each with the link that drops it alone. The two
+        # chart selections have no field in the form, so this is where they are
+        # read and undone.
+        chips = []
+
+        def chip(name, label):
+            chips.append({'label': label, 'url': designs_url(**{name: None})})
+
+        if view.exon:
+            chip('exon', 'Exon %d' % view.exon)
+        if selection:
+            chip('sub', selection['label'])
+        if view.consequence:
+            chip('consequence', CLASS_LABELS[view.consequence].capitalize())
+        if view.mutation:
+            # Named by its column, so it is not read as the consequence of that
+            # name: 'Missense' here also keeps guides whose worst edit is not.
+            chip('mutation', 'Mutation category: %s' % view.mutation)
+        if view.significance:
+            chip('significance', 'ClinVar: %s' % (
+                'any known variant' if view.significance == ANY_MATCH
+                else view.significance))
+        if view.deaminase:
+            chip('deaminase', 'Edit %s' % view.deaminase)
+        if view.strand:
+            chip('strand', '%s strand' % view.strand.capitalize())
+        if view.hide_bsmbi:
+            chip('hide_bsmbi', 'No BsmBI site')
+        if view.hide_4t:
+            chip('hide_4t', 'No 4T')
+
+        controls = _form_controls(facets)
         return page(
-            request, 'table.html', transcript_id=transcript_id, params=params,
-            view=view, columns=columns, result=result,
-            total=manifest.get('designs', table.total), facets=table.facets(),
-            any_match=ANY_MATCH, edits=ALL_EDITS, strands=STRANDS, pager=pager,
-            clear_url=build_url('/designs', values, DESIGN_PARAMS),
-            hidden=[(name, values[name]) for name in DESIGN_PARAMS + ('sort', 'dir')
-                    if values.get(name)],
+            request, 'table.html', transcript_id=transcript_id, heading=heading,
+            params=params,
+            view=view, columns=columns, rows=rows, result=result,
+            map=map_view, matrix=matrix_view, selection=selection, chips=chips,
+            total=manifest.get('designs', table.total), facets=facets,
+            consequences=consequences,
+            any_match=ANY_MATCH, strands=STRANDS, pager=pager,
+            clear_url=build_url('/designs', values, DESIGN_PARAMS,
+                                fragment=RESULTS_ANCHOR),
+            results_anchor=RESULTS_ANCHOR, coverage_anchor=COVERAGE_ANCHOR,
+            # Every parameter without a control in the form rides along, so applying
+            # a filter narrows what was clicked rather than discarding it. The page
+            # is dropped: a new filter starts from the first.
+            hidden=[(name, values[name]) for name in DESIGNS_ORDER
+                    if name not in controls and values.get(name)],
             downloads=_downloads(values))
 
-    def _download_only(request, transcript_id, params, manifest):
+    def _download_only(request, heading, params, manifest):
         # Past TABLE_MAX_ROWS the parsed frame would cost more memory than a view is
         # worth (~1.3 KB a row), so the result is never parsed; the files are the
         # result, byte-identical to what the CLI writes.
         return page(
-            request, 'download.html', transcript_id=transcript_id, params=params,
+            request, 'download.html', heading=heading, params=params,
             total=manifest['designs'], limit=settings.table_max_rows,
             downloads=_downloads(values_of(request.query_params)))
 
     return app
 
 
-# What each result file holds, in the order the page lists them: the file most
-# people want first. Written for a reader who has not run a base-editing screen.
+def _form_controls(facets):
+    """The /designs parameters the filter form has a field for, plus `page`.
+
+    The edit dropdown is left out when there is only one edit to pick.
+    """
+    controls = {'significance', 'strand', 'hide_bsmbi', 'hide_4t', 'page'}
+    if len(facets['edits']) > 1:
+        controls.add('deaminase')
+    return controls
+
+
+# Each result file's plain-language name and what it holds, in the order the page
+# lists them: the file most people want first. Written for a reader who has not run
+# a base-editing screen, so it names what a row is rather than the filename.
 DOWNLOAD_DESCRIPTIONS = {
-    'designs': 'Every guide designed for this transcript: its sequence, the base change '
-               'it makes, and the resulting amino-acid change. Most people want this file.',
-    'clinvar': 'Guides whose edit recreates a known human variant in ClinVar, with that '
-               "variant's clinical significance.",
-    'errors': "Guides or regions that couldn't be designed, and why. Often empty.",
+    'designs': ('All guides',
+                'One row per guide: its sequence, the DNA letter it changes, and the '
+                'effect on the protein. Most people want this file.'),
+    'clinvar': ('Guides matching known variants',
+                'Guides whose edit recreates a known human variant listed in ClinVar, '
+                'with whether that variant is linked to disease.'),
+    'errors': ('Design problems',
+               "Parts of the gene that couldn't be designed, and why. Often empty."),
 }
+
+
+# The table's columns on the page, in the order a reader looks for them: the guide,
+# where it cuts, what it does to the protein and whether that is a known variant,
+# then the detail. Left out are the columns that hold one value for the whole result
+# (gene, gene ID, transcript, gene strand, assembly, chromosome), which the heading
+# already names, and the four allele columns, which only restate `Edit` on one strand
+# or the other. The download has all of them.
+TABLE_COLUMNS = (
+    'sgRNA sequence', 'sgrna genomic position', 'sgRNA Strand',
+    'Amino acid edits', 'Mutation category', 'Clinical significance',
+    'Nucleotide edits', '# edits', '#silent edits', 'Edit', 'PAM',
+    'BsmBI flag', '4T flag', 'sgRNA context sequence',
+)
 
 
 def _downloads(values):
     """Download links for a result: the design parameters, and nothing else."""
-    return [(RESULT_FILES[name],
+    return [(label, RESULT_FILES[name],
              build_url('/designs/download', values, DOWNLOAD_PARAMS, file=name),
              description)
-            for name, description in DOWNLOAD_DESCRIPTIONS.items()]
+            for name, (label, description) in DOWNLOAD_DESCRIPTIONS.items()]
 
 
 def _manifest(storage, key):

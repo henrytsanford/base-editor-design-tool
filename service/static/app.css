@@ -1,7 +1,26 @@
-:root { --fg: #1a1a1a; --muted: #666; --line: #ddd; --bg: #fff; --accent: #0b5; }
+:root { --fg: #1a1a1a; --muted: #666; --line: #ddd; --bg: #fff; --accent: #0b5;
+        /* The accent's pale tint, for hover and highlighted blocks, and its border. */
+        --accent-tint: #f3fbf6; --accent-line: #bfe6cd;
+        /* What a guide does, on the coverage map. Categorical: each consequence is
+           its own hue, with no severity implied by colour. Checked against this
+           page's white for colour-vision separation -- worst pair dE 9.2 -- so
+           changing one means checking the set again. Non-coding edits are grey,
+           which is what keeps colour meaning "this changes the protein". Guides
+           with no edit are not drawn, so they have no colour. */
+        --lof: #eb6834; --mis: #2a78d6; --sil: #1baf7a;
+        --nc: #b9b9b9;
+        /* The substitution matrix uses these same hues, with its count as the
+           fill's opacity, set per square in coverage.py. */
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        /* Selection is ink, not a hue: every hue on the charts means a consequence.
+           The exon grey is kept light enough that a selected exon, drawn in ink,
+           stands out from it. */
+        --select: #1a1a1a; --exon-block: #7a7a7a;
+        /* The grey pill behind a chip and a clickable key entry. */
+        --pill: #f0f0f0; --pill-hover: #e2e2e2; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
-       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+       font: 15px/1.5 var(--sans); }
 header { border-bottom: 1px solid var(--line); padding: 12px 20px; }
 header a { color: var(--fg); text-decoration: none; font-weight: 600; }
 main { padding: 20px; }
@@ -10,7 +29,7 @@ footer { border-top: 1px solid var(--line); padding: 12px 20px;
 footer a { color: inherit; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 p { margin: 6px 0; }
-.muted { color: var(--muted); font-size: 13px; }
+.muted { font-size: 13px; }
 .status { font-size: 14px; }
 .error { color: #b00; }
 .scroll { overflow-x: auto; border: 1px solid var(--line); margin-top: 12px; }
@@ -21,29 +40,48 @@ th { background: #fafafa; position: sticky; top: 0; }
 /* Forms and controls. No inline styles anywhere: style-src is 'self'. */
 .card { border: 1px solid var(--line); border-radius: 6px; padding: 16px; max-width: 560px; }
 .field { margin: 0 0 12px; }
-.field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.field label, .field .label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 .field.checkbox label { display: inline-block; font-weight: 400; margin-right: 14px; }
 input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--line);
                 border-radius: 4px; background: var(--bg); color: var(--fg); }
 input[type=number] { width: 8em; }
 #q, #pam, #window { width: 100%; max-width: 260px; }
 select { max-width: 340px; }
-button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0; border-radius: 4px;
-         background: var(--accent); color: #fff; cursor: pointer; }
+button, a.button { font: inherit; font-weight: 600; padding: 6px 14px; border: 0;
+                   border-radius: 4px; background: var(--accent); color: #fff;
+                   cursor: pointer; display: inline-block; line-height: 1.5;
+                   text-decoration: none; }
 details.advanced { margin: 4px 0 14px; }
 details.advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 10px; }
 form.inline { margin: 0 0 14px; }
-form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 14px;
-               border: 1px solid var(--line); border-radius: 6px; padding: 12px;
-               margin-bottom: 12px; }
+/* The filter bar: one row above the table, wrapping on a narrow screen. */
+form.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px;
+               padding: 12px 0; border-top: 1px solid var(--line); }
 form.filters .field { margin-bottom: 0; }
-form.filters button { margin-right: 8px; }
+/* The checkboxes sit on the selects' baseline rather than under a label. */
+form.filters .field.checkbox { padding-bottom: 6px; }
+/* The count and the filters in force: the answer to the last click. */
+.result-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+                 margin-bottom: 10px; font-size: 14px; }
+.result-status p { margin: 0; }
+.result-status .muted { color: var(--muted); }
+.result-status .selection { flex-basis: 100%; }
+/* A chip is a link that removes its filter, so no script is needed. Ink, not the
+   accent: the accent means an action, and a chip is a thing in force. */
+ul.chips { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
+           gap: 6px; }
+ul.chips a { display: inline-block; padding: 2px 10px; border-radius: 999px;
+             font-size: 13px; color: var(--fg); background: var(--pill);
+             text-decoration: none; }
+ul.chips a:hover, ul.chips a:focus { background: var(--pill-hover); }
+ul.chips a span { color: var(--muted); margin-left: 2px; }
+ul.chips .clear a { background: none; color: var(--muted); text-decoration: underline; }
 
 /* Gene list */
 .badge { font-size: 11px; font-weight: 600; color: #fff; background: var(--accent);
          border-radius: 3px; padding: 1px 5px; margin-left: 4px; }
-tr.preferred td { background: #f3fbf6; }
+tr.preferred td { background: var(--accent-tint); }
 a.go { font-weight: 600; }
 ul.matches { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
 
@@ -54,10 +92,122 @@ th.asc a::after { content: " \2191"; }
 th.desc a::after { content: " \2193"; }
 
 .pager { margin: 12px 0; display: flex; gap: 16px; align-items: center; }
-.downloads { margin: 12px 0 16px; }
-.downloads h2 { font-size: 15px; margin: 0 0 4px; }
-.downloads ul { list-style: none; padding: 0; margin: 0 0 4px; }
+/* Grey is what marks an unavailable Previous/Next as not a link. */
+.pager .muted { color: var(--muted); }
+/* The downloads are what most visitors came for, so they are the first thing under
+   the heading and the only tinted block on the page. */
+.downloads { margin: 14px 0 18px; padding: 14px 16px; border-radius: 6px;
+             background: var(--accent-tint); border: 1px solid var(--accent-line); }
+.downloads h2 { font-size: 16px; margin: 0 0 10px; }
+.downloads .primary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.downloads .primary p { margin: 0; flex: 1 1 320px; font-size: 14px; }
+a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
+.downloads ul.also { list-style: none; padding: 0; margin: 12px 0 0;
+                     border-top: 1px solid #d5eedd; padding-top: 8px; }
 .downloads li { margin: 2px 0; font-size: 14px; }
 .downloads li a { font-weight: 600; }
+/* On the table page: heading left, downloads right, one row. It wraps to two on a
+   narrow screen, the downloads then sitting under the heading. */
+.result-head { display: flex; flex-wrap: wrap; align-items: flex-start;
+               justify-content: space-between; gap: 10px 24px; }
+/* A capped width, so the descriptions wrap in their column rather than pushing the
+   heading off the row. */
+.downloads.compact { max-width: 440px; font-size: 13px; margin: 0; padding: 0;
+                     background: none; border: 0; }
+.downloads.compact .primary { display: block; }
+.downloads.compact .primary p { margin: 6px 0 4px; font-size: inherit; }
+.downloads.compact a.button.download { font-size: 15px; padding: 8px 16px; }
+.downloads.compact ul.also { margin: 0; border-top: 0; padding-top: 0; }
+.downloads.compact li { font-size: inherit; }
+.downloads.compact .muted { color: var(--muted); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Coverage panels: the gene map full width, then the substitution matrix at the
+   size its squares need. Both are server-rendered SVG styled only by class, so
+   style-src stays 'self'. */
+.panel { min-width: 0; margin: 0;
+         border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+.panel.map { margin: 16px 0 18px; }
+/* The matrix folds to one line under the map. Open, its caption and key sit to the
+   right of the grid rather than above it, so the panel spends the page's width
+   instead of leaving it empty; a narrow screen stacks them again. */
+.panel.matrix { margin-bottom: 18px; padding: 10px 14px; }
+.panel.matrix summary { cursor: pointer; display: flex; align-items: baseline;
+                        gap: 10px; }
+/* A flex summary loses the browser's own triangle, so it draws one. */
+.panel.matrix summary::-webkit-details-marker { display: none; }
+.panel.matrix summary::before { content: "\25B8"; color: var(--muted); width: 12px;
+                                font-size: 16px; line-height: 1; }
+.panel.matrix[open] summary::before { content: "\25BE"; }
+.panel.matrix summary h2 { font-size: 15px; margin: 0; }
+.panel.matrix summary .muted { color: var(--muted); }
+.panel.matrix figure { display: flex; flex-wrap: wrap; align-items: flex-start;
+                       gap: 12px 28px; margin: 10px 0 2px; }
+.panel.matrix figure .viz { order: 1; flex: 0 1 460px; min-width: 0; }
+.panel.matrix figcaption { order: 2; flex: 1 1 220px; max-width: 320px; padding-top: 4px; }
+.panel.matrix figcaption .key { flex-direction: column; gap: 6px; }
+.panel figcaption h2 { font-size: 15px; margin: 0 0 4px; }
+.panel figcaption p { margin: 0 0 10px; }
+.viz { width: 100%; height: auto; display: block; }
+.viz text { font-family: var(--sans); font-size: 11px; fill: var(--fg); }
+.viz .end { text-anchor: end; }
+.viz .spine { stroke: #bbb; stroke-width: 1; }
+.viz .exon rect { fill: var(--exon-block); }
+.viz a:hover .exon rect, .viz a:focus .exon rect { fill: var(--select); }
+.viz .exon.on rect { fill: var(--select); }
+.viz .exl { text-anchor: middle; font-size: 9px; font-weight: 600; fill: #fff;
+            pointer-events: none; }
+/* One class per consequence: `fill` for the map's bars, `background` for the
+   legend swatches, so the two cannot drift apart. */
+.c-lof { fill: var(--lof); background: var(--lof); }
+.c-mis { fill: var(--mis); background: var(--mis); }
+.c-sil { fill: var(--sil); background: var(--sil); }
+.c-nc { fill: var(--nc); background: var(--nc); }
+.viz .hit { fill: transparent; }
+.viz .bin:hover .hit { fill: rgba(0, 0, 0, .06); }
+/* A selected substitution fades everything but its own guides: a whole bin that
+   holds none of them, and the rest of a bin's stack where it does. */
+.viz .bin.dim rect, .viz .bin rect.dim { opacity: .15; }
+/* A bin is a link to its exon, so it shows a pointer like the exon does. */
+.viz a .bin { cursor: pointer; }
+/* An exon or square that would combine with the other selection into an empty table:
+   still drawn, so the chart keeps its shape, but faded and not a link. */
+.viz .exon.empty rect { opacity: .3; }
+.viz.mtx .cell.empty rect { fill-opacity: .12; }
+
+/* The matrix. Empty squares are the answer to "can this editor do it at all", so
+   they are drawn rather than left out. */
+.viz.mtx .cell rect { stroke: #e8e8e8; stroke-width: .5; }
+.viz.mtx .c-off { fill: var(--bg); }
+.viz.mtx a:hover .cell rect, .viz.mtx a:focus .cell rect { stroke: var(--fg); stroke-width: 1.5; }
+.viz.mtx .cell.on rect { stroke: var(--select); stroke-width: 2.5; }
+.viz.mtx .sep { stroke: #999; stroke-width: 1; }
+.viz.mtx .frame { fill: none; stroke: #999; stroke-width: 1; }
+.viz.mtx .rl { text-anchor: end; font-size: 10px; }
+.viz.mtx .cl { text-anchor: middle; font-size: 10px; }
+.viz.mtx .cl.rot { text-anchor: end; font-size: 9px; }
+.viz.mtx .gl { text-anchor: end; font-size: 10px; }
+.viz.mtx .gl.mid { text-anchor: middle; }
+.viz.mtx .ax { text-anchor: middle; font-size: 12px; }
+
+/* The legend sits in the caption, above its chart, and carries the counts. */
+.key { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-wrap: wrap;
+       gap: 3px 14px; font-size: 12px; color: var(--fg); }
+.key .total { font-weight: 600; }
+.key li { display: flex; align-items: center; gap: 6px; }
+.key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.key .note { color: var(--muted); font-style: italic; }
+.key li.off { visibility: hidden; }
+/* A class in the key is the consequence filter. It keeps the legend's look, ink
+   rather than link blue, and shows it is clickable the way a chip does: a grey
+   pill on hover, and an ink outline while it is the filter in force. The negative
+   margin keeps the pill's padding from spacing the entries further apart. */
+.key a { display: flex; align-items: center; gap: 6px; color: inherit;
+         text-decoration: none; padding: 1px 6px; margin: -1px -6px;
+         border-radius: 999px; }
+.key a:hover, .key a:focus { background: var(--pill); }
+.key a.on { background: var(--pill); box-shadow: inset 0 0 0 1px var(--select);
+            font-weight: 600; }
+/* The matrix's count scale: the opacity steps its squares use, in ink. */
+.key .steps svg { fill: var(--fg); }

@@ -4,12 +4,14 @@ Marked `bundle` so it skips where there is no reference data, like the golden te
 ClinVar comes from the small `clinvar_db` fixture rather than the 767 MB database, and
 ISY1 is the cheapest gene in the panel (0.6 s in the design doc's table).
 """
+import html
 import re
 import time
 
 import pytest
 
-from service.app import create_app
+from bedesign import DESIGN_COLUMNS
+from service.app import TABLE_COLUMNS, create_app
 from service.config import Settings
 from service.jobs import PoolBusy
 
@@ -89,7 +91,7 @@ def test_a_design_runs_and_renders_its_guides(client):
     response = wait_for_table(client, url)
     assert response.status_code == 200
     assert 'sgRNA sequence' in response.text
-    assert re.search(r'\d+ guides?\.', response.text)
+    assert re.search(r'<strong>[\d,]+ guides?</strong>', response.text)
 
 
 def test_the_second_request_is_served_from_the_cache(client, cached_url, tmp_path):
@@ -263,11 +265,15 @@ def test_the_downloads_are_described_above_the_table(client, cached_url):
     """Someone new to base editing should not have to scroll past the table, or
     guess from a filename, to find the file they want."""
     text = client.get(cached_url).text
-    assert text.index('designs.tsv.gz') < text.index('<table')
-    for filename, description in [('designs.tsv.gz', 'Most people want this file'),
-                                  ('clinvar.tsv.gz', 'known human variant'),
-                                  ('errors.tsv.gz', 'Often empty')]:
-        assert filename in text and description in text
+    # A description only in a hover title is one nobody reads.
+    visible = re.sub(r'title="[^"]*"', '', text)
+    table = visible.index('<table')
+    for label, filename, description in [
+            ('all guides', 'designs.tsv.gz', 'Most people want this file'),
+            ('Guides matching known variants', 'clinvar.tsv.gz', 'known human variant'),
+            ('Design problems', 'errors.tsv.gz', 'Often empty')]:
+        for piece in (label, filename, description):
+            assert -1 < visible.find(piece) < table, piece
     assert '&amp;mdash;' not in text
 
 
@@ -413,6 +419,23 @@ def test_a_header_link_sorts_the_table(client, cached_url):
     assert plain and sorted_desc and plain != sorted_desc
 
 
+def test_the_table_leads_with_what_the_guide_does(client, cached_url):
+    """The columns that hold one value for the whole result are in the heading, not
+    repeated on every row; the download keeps them."""
+    text = client.get(cached_url).text
+    headers = [html.unescape(name) for name in
+               re.findall(r'<th[^>]*><a [^>]*>(.*?)</a></th>', text)]
+    assert headers == list(TABLE_COLUMNS)
+    assert 'Ensembl Gene ID' not in headers and 'Genome assembly' not in headers
+    row = re.search(r'<tbody>\s*<tr>(.*?)</tr>', text, re.S).group(1)
+    assert row.count('<td>') == len(TABLE_COLUMNS)
+
+
+def test_every_table_column_is_one_the_engine_writes():
+    """A renamed engine column would otherwise drop out of the page unnoticed."""
+    assert set(TABLE_COLUMNS) <= set(DESIGN_COLUMNS)
+
+
 def test_the_second_page_shows_different_guides(client, cached_url):
     assert 'Page 1 of' in client.get(cached_url).text
     assert (_first_cell(client.get(cached_url).text)
@@ -452,3 +475,197 @@ def _first_cell(html):
     """The first data cell of the rendered table, for comparing orderings."""
     match = re.search(r'<tbody>\s*<tr><td>(.*?)</td>', html, re.S)
     return match.group(1) if match else ''
+
+
+def _matched(html):
+    """The (N, M) of the 'N of M guides match' the table prints when filtered."""
+    match = re.search(r'([\d,]+) of ([\d,]+) guides match', html)
+    return tuple(int(group.replace(',', '')) for group in match.groups()) if match else None
+
+
+def test_the_table_page_carries_both_coverage_panels(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'class="viz gene"' in response.text
+    assert 'class="viz mtx"' in response.text
+    # Between the downloads and the filter form, which is where the page puts it.
+    assert (response.text.index('Download the full result')
+            < response.text.index('Guide coverage')
+            < response.text.index('class="filters"'))
+
+
+def test_clicking_an_exon_filters_the_table_to_it(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    link = re.search(r'href="(/designs\?[^"]*exon=2[^"]*)"', response.text)
+    assert link, 'the map offers no exon link'
+    filtered = client.get(html.unescape(link.group(1)))
+    assert filtered.status_code == 200
+    matched, total = _matched(filtered.text)
+    assert 0 < matched < total
+    # The selection is read, and undone, as a chip above the table.
+    assert re.search(r'<a href="[^"]*" title="Remove this filter">Exon 2 ', filtered.text)
+
+
+def test_clicking_a_square_filters_and_marks_the_map(client):
+    """The number on the square is the number the table then shows."""
+    response = wait_for_table(client, DESIGNS_URL)
+    link = re.search(r'href="(/designs\?[^"]*sub=([A-Za-z]{3}-[A-Za-z]{3})[^"]*)"',
+                     response.text)
+    assert link, 'the matrix offers no substitution link'
+    url = html.unescape(link.group(1))
+    promised = int(re.search(
+        r'>[A-Za-z]+ to [A-Za-z]+ · (\d+) guide', response.text).group(1))
+    filtered = client.get(url)
+    assert filtered.status_code == 200
+    assert _matched(filtered.text)[0] == promised
+    # and the map above it fades every bin without one of those guides
+    assert 'class="bin dim"' in filtered.text
+    assert 'class="bin"' in filtered.text
+
+
+def test_a_bar_on_the_map_links_to_its_exon(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    bins = re.findall(r'<a href="([^"]*)"><g class="bin', response.text)
+    assert bins, 'the map offers no bin link'
+    assert all('exon=' in html.unescape(url) for url in bins)
+
+
+def test_an_exon_and_a_square_combine(client):
+    """The two chart selections narrow each other instead of replacing each other,
+    and every link the charts offer then still matches a guide."""
+    response = wait_for_table(client, DESIGNS_URL)
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    exon = re.search(r'<a href="([^"]*)"><g class="exon"', selected.text)
+    assert exon, 'no exon holds the selected change'
+    both = client.get(html.unescape(exon.group(1)))
+    assert both.status_code == 200
+    assert 'title="Remove this filter">Exon ' in both.text
+    assert 'sub=' + sub in html.unescape(exon.group(1))
+    assert _matched(both.text)[0] > 0
+
+
+def test_a_square_matching_nothing_in_the_selected_exon_is_not_a_link(client):
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2')
+    cells = re.findall(r'(<a href="[^"]*">)?<g class="cell( empty)?">', response.text)
+    assert any(empty for _, empty in cells)
+    assert not any(link and empty for link, empty in cells)
+
+
+def test_links_land_where_the_click_is_answered(client):
+    """A reload lands on the map for a chart click and on the filters for anything
+    done to the table, rather than at the top of the page."""
+    response = wait_for_table(client, DESIGNS_URL)
+    text = response.text
+    assert 'id="coverage"' in text and 'id="results"' in text
+    assert re.search(r'href="/designs\?[^"]*exon=\d+#coverage"', text)
+    assert re.search(r'href="/designs\?[^"]*sub=[A-Za-z-]+#coverage"', text)
+    assert re.search(r'href="/designs\?[^"]*sort=[^"]*#results"', text)
+    assert 'action="/designs#results"' in text
+    # The downloads are files, not views, and carry no fragment.
+    assert not re.search(r'href="/designs/download[^"]*#', text)
+
+
+def test_a_substitution_this_editor_cannot_make_is_a_400(client):
+    """Tryptophan to tryptophan needs no edit at all, so no guide makes it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&sub=Trp-Trp')
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize('query', ['exon=0', 'exon=99999', 'sub=Xyz-Gly',
+                                   'sub=drop+table', 'exon=two'])
+def test_a_bad_coverage_filter_is_refused(client, query):
+    response = client.get('%s&%s' % (DESIGNS_URL, query))
+    assert response.status_code == 400
+
+
+def test_the_filter_form_keeps_the_chart_selection(client):
+    """Applying a filter narrows what was clicked instead of discarding it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2')
+    form = response.text[response.text.index('class="filters"'):
+                         response.text.index('</form>')]
+    assert '<input type="hidden" name="exon" value="2">' in form
+    assert 'name="sub"' not in form
+
+
+def test_a_chip_removes_only_its_own_filter(client):
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&exon=2&mutation=Missense')
+    chips = dict((label.strip(), html.unescape(url)) for url, label in re.findall(
+        r'<a href="([^"]*)" title="Remove this filter">([^<]*)<', response.text))
+    category = 'Mutation category: Missense'
+    assert set(chips) == {'Exon 2', category}
+    assert 'exon=' not in chips['Exon 2'] and 'mutation=Missense' in chips['Exon 2']
+    assert 'exon=2' in chips[category] and 'mutation=' not in chips[category]
+    assert 'Clear all' in response.text
+
+
+def test_the_map_key_is_the_consequence_filter(client):
+    """Each class in the key links to exactly as many guides as it says it counts,
+    and there is no second list of consequences in the form. Guides with no edit
+    are not drawn, so theirs is the one entry without a swatch."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'name="mutation"' not in response.text
+    assert 'c-none' not in response.text
+    key = re.findall(r'<a href="([^"]*consequence=(\w+)[^"]*)"[^>]*>'
+                     r'(?:<i class="c-\w+"></i>)?([\d,]+) ', response.text)
+    assert {name for _, name, _ in key} >= {'mis', 'none'}
+    for url, name, count in key:
+        filtered = client.get(html.unescape(url))
+        assert re.search(r'<strong>%s of [\d,]+ guides match' % count, filtered.text), name
+        assert 'class="on" aria-current="true"' in filtered.text
+        assert '<input type="hidden" name="consequence" value="%s">' % name \
+            in filtered.text
+
+
+def test_a_mutation_link_still_filters_and_survives_the_form(client):
+    """The form no longer offers the engine's categories, but a link naming one
+    keeps working, and applying another filter does not drop it."""
+    wait_for_table(client, DESIGNS_URL)
+    response = client.get(DESIGNS_URL + '&mutation=Missense')
+    assert 'guides match' in response.text
+    assert '<input type="hidden" name="mutation" value="Missense">' in response.text
+
+
+def test_a_single_edit_editor_offers_no_edit_dropdown(client):
+    """ABE7.10 makes only A-G, and a dropdown with one choice is not a choice."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert 'name="deaminase"' not in response.text
+
+
+def test_selecting_on_a_chart_leaves_its_caption_alone(client):
+    """A selection that rewrote the caption would move the drawing under it."""
+    def captions(text):
+        # The consequence links carry the selection in their URLs, which the reader
+        # never sees, so only what is drawn is compared.
+        return [re.sub(r' href="[^"]*"', '', caption)
+                for caption in re.findall(r'<figcaption>.*?</figcaption>', text, re.S)]
+
+    response = wait_for_table(client, DESIGNS_URL)
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    for query in ('&exon=2', '&sub=' + sub):
+        selected = client.get(DESIGNS_URL + query)
+        # The map's key differs only in the one entry kept hidden but laid out.
+        assert (captions(selected.text.replace(' class="off" aria-hidden="true"', ''))
+                == captions(response.text.replace(' class="off" aria-hidden="true"', '')))
+    assert re.search(r'change is made at \d+\s+site', selected.text)
+
+
+def test_a_selected_square_shows_as_a_chip_in_three_letter_names(client):
+    response = wait_for_table(client, DESIGNS_URL)
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    source, target = sub.split('-')
+    label = '%s → %s' % (source, 'Stop' if target == 'Ter' else target)
+    assert 'title="Remove this filter">%s ' % label in selected.text
+
+
+def test_the_matrix_is_folded_until_a_square_is_selected(client):
+    """Open whenever a square is selected, since that is what the map then shows."""
+    response = wait_for_table(client, DESIGNS_URL)
+    assert '<details class="panel matrix">' in response.text
+    sub = re.search(r'sub=([A-Za-z]{3}-[A-Za-z]{3})', response.text).group(1)
+    selected = client.get(DESIGNS_URL + '&sub=' + sub)
+    assert '<details class="panel matrix" open>' in selected.text
