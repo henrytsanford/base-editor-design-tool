@@ -38,13 +38,21 @@ gigabyte of downloads.
         -e MAX_JOBS=2 -e JOB_TIMEOUT=120 -e MCP_WAIT=20 \
         bedesign:$TAG
 
-    curl -s localhost:8000/healthz
+    curl -s localhost:8000/health
     curl -s 'localhost:8000/designs?transcript=ENST00000307102&preset=ABE7.10' | head
 
 The first `/designs` call starts a job and returns the running page; the second, a few
 seconds later, returns the table.
 
-The same service answers MCP over HTTP at `/api/mcp` -- `healthz` reports `"mcp": true`
+The health endpoint answers at `/health` and at `/healthz`, one handler for both.
+Check it from outside on `/health`: Cloud Run's front end answers the exact path
+`/healthz` itself and never forwards it, so an external check there gets a Google 404
+rather than this service. A startup or liveness probe is a different caller -- it runs
+against the instance rather than through that front end -- so either path works for one,
+and `/healthz` keeps answering so that a probe already pointed at it cannot start
+failing and restarting the container.
+
+The same service answers MCP over HTTP at `/api/mcp` -- `/health` reports `"mcp": true`
 when the stack is installed. No trailing slash: Starlette 307s `/api/mcp/` onto it.
 
     curl -si -X POST localhost:8000/api/mcp \
@@ -97,7 +105,7 @@ What those limits need in order to hold on Cloud Run:
   results folder is kept under `RESULTS_MAX_MB` (1024) by deleting the least recently
   viewed results after each job.
 - **Survive a dead worker.** Done: a worker killed outright no longer leaves the pool
-  unusable; it is replaced, and `/healthz` reports the crash (see "Watching it").
+  unusable; it is replaced, and `/health` reports the crash (see "Watching it").
 
 The MCP endpoint at `/api/mcp` is public on the same terms and shares those limits
 rather than having its own: the same token bucket per address, the same two-worker pool,
@@ -108,9 +116,9 @@ a free worker before telling the model to call again -- so Cloud Run's `--timeou
 exceed `MCP_WAIT + JOB_TIMEOUT`, or a design is cut off mid-wait.
 
 `TRUSTED_PROXY_HOPS` can be right for only one entry path: Firebase Hosting adds a hop
-that the `run.app` URL does not. Every wrong value collapses the limiter into a single
+that the `run.app` URL does not (see "Public URL"). Every wrong value collapses the limiter into a single
 bucket for everybody rather than failing loudly, so verify it rather than reasoning
-about it -- `/healthz` logs `host=`, `forwarded=` and `charging=`, and `charging=` must
+about it -- `/health` logs `host=`, `forwarded=` and `charging=`, and `charging=` must
 differ between two requests from two different networks.
 
 Set a billing budget alert. A new deploy is opened to the public with:
@@ -133,9 +141,25 @@ avoids a Node install. Responses come back `Cache-Control: private`, so Hosting'
 passes every request through instead of caching pages. The `*.run.app` URL still answers
 directly.
 
-Hosting is one more proxy in front of Cloud Run, so the `X-Forwarded-For` chain differs
-between the two URLs, and a single `TRUSTED_PROXY_HOPS` can be right for only one of
-them. Measure both before changing it.
+Hosting is one more proxy in front of Cloud Run. Measured so far: Cloud Run reports the real client
+address for a request sent straight to the `*.run.app` URL, and a Google address for one
+that came through Hosting -- so with `TRUSTED_PROXY_HOPS=1`, which is right for the
+direct URL, Hosting traffic is billed to the proxy rather than to whoever sent it. The
+`charging=` field on `/health` is what settles it; the chain itself has not been read.
+
+Two other things Hosting does that are worth knowing before they cost an afternoon.
+
+It **rewrites the `Host` header** to the `*.run.app` name, so `bedesigner.web.app` never
+reaches the container. Anything that allow-lists hostnames has to name the Cloud Run
+host, not the public one -- which is why the MCP transport's DNS-rebinding protection is
+left off rather than configured with an allow-list.
+
+It **cuts a request off at 60 seconds**, answering 502. `JOB_TIMEOUT` is 60 and a design
+is allowed to wait `MCP_WAIT` on top of that, so a slow gene through Hosting returns a
+502 while the identical request to the `*.run.app` URL returns the design, or the message
+saying what to narrow. That is why the top-level README gives MCP clients the Cloud Run
+address. The browser path is unaffected: `/designs` starts a job and returns a page that polls, so
+no single request there is long-lived.
 
 ## Deploying a change
 
@@ -146,14 +170,15 @@ output changed intentionally, bump `ENGINE_VERSION` so cache keys turn over.
 
 ## Watching it
 
-Logs go to stdout. The things worth noticing, in order: `/healthz` not answering, the
+Logs go to stdout. The things worth noticing, in order: `/health` not answering, the
 service restarting repeatedly rather than once, and -- once it is public -- the billing
 budget alert. Any request keeps the instance warm, crawlers included, so a public URL
 costs more than its real use would suggest; the budget alert is how you find out.
 
-`/healthz` answers 503 `worker crashed` from a design worker dying until a job next
+`/health` answers 503 `worker crashed` from a design worker dying until a job next
 finishes normally. The service replaces the pool on its own, so a single 503 is not an
 outage; one that persists means the pool keeps dying. Cloud Run only restarts the
-container on it if an HTTP liveness probe on `/healthz` is configured -- give it a
-failure threshold longer than one design, so it does not kill a job the replacement pool
-is already running.
+container on it if an HTTP liveness probe is configured -- either path serves one, since
+a probe reaches the instance directly. Give it a failure threshold longer than one
+design, so it does not kill a job the replacement pool is already running. The service
+currently has no HTTP probe at all: its startup probe is a TCP check on the port.
