@@ -189,8 +189,19 @@ def create_app(settings=None):
     def bad_request(request, message):
         return page(request, 'error.html', status_code=400, message=message)
 
+    # Two paths, one handler, because the two callers reach this container by
+    # different routes. Cloud Run's front end answers the exact path '/healthz'
+    # itself and never forwards it -- measured on the deployed service: every other
+    # path arrives, including '/healthz/' and '/healthZ', and only that spelling comes
+    # back as a Google 404 -- so anything checking from outside has to use '/health'.
+    # A Cloud Run startup or liveness probe is not outside: it runs against the
+    # instance directly, so it can use either, and a probe already pointed at
+    # '/healthz' would start failing if that path stopped answering. Restarting the
+    # container on a failed liveness probe kills the designs it is running, so the
+    # old path keeps answering rather than being renamed out from under it.
+    @app.get('/health')
     @app.get('/healthz')
-    def healthz(request: Request):
+    def health(request: Request):
         # A 503 once a worker has died, until a job next finishes on the replacement
         # pool. Answering 'ok' regardless would leave a liveness probe nothing to see.
         healthy = app.state.pool.healthy()
@@ -200,7 +211,7 @@ def create_app(settings=None):
         # would bill, which is the only way to tell that it is identifying clients
         # rather than pooling them all into one bucket. Returning a header to its
         # sender would be a reflection this app has no use for.
-        log.info('healthz host=%s forwarded=%s charging=%s',
+        log.info('health host=%s forwarded=%s charging=%s',
                  scrub(request.headers.get('host')),
                  scrub(request.headers.get('x-forwarded-for')),
                  scrub(client_ip(request, settings.trusted_proxy_hops)))

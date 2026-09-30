@@ -169,7 +169,7 @@ class JobPool(object):
         self._clients = {}
         self._failed = {}
         # Set when a worker dies, cleared when a job next finishes without one
-        # dying. What /healthz reports.
+        # dying. What /health reports.
         self._crashed = False
         self._pool = self._new_pool()
 

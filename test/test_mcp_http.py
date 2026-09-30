@@ -107,8 +107,8 @@ def test_the_mcp_response_carries_the_security_headers(client):
     assert rpc(client, 'tools/list').headers['x-frame-options'] == 'DENY'
 
 
-def test_healthz_reports_the_mount(client):
-    health = client.get('/healthz').json()
+def test_health_reports_the_mount(client):
+    health = client.get('/health').json()
     assert health['mcp'] is True
     assert health['status'] == 'ok'
 

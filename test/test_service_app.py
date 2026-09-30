@@ -49,8 +49,16 @@ def cached_url(client):
     return DESIGNS_URL
 
 
-def test_healthz_reports_the_engine_version(client):
-    body = client.get('/healthz').json()
+def test_health_answers_at_both_paths(client):
+    # '/health' for anything outside, since Cloud Run never forwards '/healthz';
+    # '/healthz' for a probe, which reaches the container directly and would restart
+    # it on a 404. See the comment on the route in app.py.
+    for path in ('/health', '/healthz'):
+        assert client.get(path).json()['engine_version'], path
+
+
+def test_health_reports_the_engine_version(client):
+    body = client.get('/health').json()
     assert body['status'] == 'ok' and body['engine_version']
 
 
@@ -69,7 +77,7 @@ def test_the_footer_names_the_reference_data(client):
 
 
 def test_every_response_carries_the_security_headers(client):
-    response = client.get('/healthz')
+    response = client.get('/health')
     assert response.headers['x-content-type-options'] == 'nosniff'
     assert response.headers['x-frame-options'] == 'DENY'
     assert response.headers['referrer-policy'] == 'no-referrer'
@@ -188,9 +196,9 @@ def test_a_second_design_from_one_client_waits_without_spending_tokens(
         assert client.app.state.limiter.allow('testclient') is True
 
 
-def test_healthz_fails_after_a_worker_crash(client, monkeypatch):
+def test_health_fails_after_a_worker_crash(client, monkeypatch):
     monkeypatch.setattr(client.app.state.pool, 'healthy', lambda: False)
-    response = client.get('/healthz')
+    response = client.get('/health')
     assert response.status_code == 503
     assert response.json()['status'] == 'worker crashed'
 

@@ -46,7 +46,7 @@ EXPOSE 8000
 # Ignored by Cloud Run, which has health checking of its own; this is for the
 # person running the image by hand.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD \
-    python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-8000}/healthz', timeout=2)"
+    python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-8000}/health', timeout=2)"
 
 # Binding 0.0.0.0 is safe here because the container's network namespace is the
 # boundary and the platform supplies $PORT. `exec` so that uvicorn is PID 1 and

@@ -166,7 +166,10 @@ choose a deaminase, design, and then ask for the guides that matter.
 There are two ways to reach it. The deployed service serves it over HTTP, which needs
 nothing installed locally and no reference bundle:
 
-    claude mcp add --transport http bedesign https://<the service URL>/api/mcp
+    claude mcp add --transport http bedesign https://bedesign-ptj3oo2b3a-uc.a.run.app/api/mcp
+
+Use that Cloud Run address rather than the Firebase Hosting one: Hosting cuts a request
+off at 60 seconds, less than a design is allowed to take (see `deploy/README.md`).
 
 Or run it locally over stdio, against your own bundle:
 
