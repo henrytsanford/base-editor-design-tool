@@ -21,8 +21,14 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
        font: 15px/1.5 var(--sans); }
-header { border-bottom: 1px solid var(--line); padding: 12px 20px; }
+header { border-bottom: 1px solid var(--line); padding: 12px 20px; display: flex;
+         flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+         gap: 4px 16px; }
 header a { color: var(--fg); text-decoration: none; font-weight: 600; }
+/* The one link out of the app, on every page. Quieter than the wordmark beside it:
+   it is a way through, not where you are. */
+header a.nav { font-weight: 400; font-size: 13px; color: var(--muted);
+               text-decoration: underline; }
 main { padding: 20px; }
 footer { border-top: 1px solid var(--line); padding: 12px 20px;
          color: var(--muted); font-size: 13px; }
@@ -122,6 +128,20 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
 .downloads.compact .muted { color: var(--muted); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
                    clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Prose: the one page here that is read rather than used. Measured, because a line
+   of text is harder to follow than a row of controls. */
+.doc { max-width: 680px; }
+.doc h2 { font-size: 16px; margin: 22px 0 6px; }
+.doc ul { margin: 6px 0; padding-left: 20px; }
+.doc li { margin: 4px 0; }
+/* An address to copy: it wraps rather than scrolling, so a narrow screen shows all of
+   it and a double-click still selects the whole thing. */
+pre { margin: 6px 0; padding: 8px 10px; background: var(--pill); border-radius: 4px;
+      font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+code { font-size: 13px; }
+/* Example prompts, set apart from the instructions around them. */
+ul.asks li { color: var(--muted); }
 
 /* Coverage panels: the gene map full width, then the substitution matrix at the
    size its squares need. Both are server-rendered SVG styled only by class, so

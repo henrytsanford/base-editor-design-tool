@@ -42,6 +42,9 @@ installed locally:
 Use this Cloud Run address rather than `bedesigner.web.app`: Firebase Hosting cuts requests off at
 60 s, less than a design is allowed to take.
 
+The hosted app says the same thing in a page you can send someone:
+<https://bedesigner.web.app/mcp-help>.
+
 Seven tools: `resolve_gene`, `list_transcripts` and `list_editors` to settle what to design;
 `design_guides` to run it; `query_guides`, `get_clinvar_annotations` and `export_run` to read the
 result back. `design_guides` returns counts, per-exon coverage and a run handle rather than rows,
