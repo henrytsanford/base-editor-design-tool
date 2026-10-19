@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Use from a chat assistant{% endblock %}
+{% block content %}
+<div class="doc">
+<h1>Use from a chat assistant</h1>
+<p class="muted">The same designs, over the
+<a href="https://modelcontextprotocol.io">Model Context Protocol</a>: ask Claude, or any
+MCP client, to plan a base-editing experiment in plain language.</p>
+
+<h2>Connect</h2>
+<p>Server address &mdash; streamable HTTP, nothing to install and no sign-in:</p>
+<pre>{{ mcp_url }}</pre>
+<ul>
+  <li><strong>Claude Code:</strong>
+    <pre>claude mcp add --transport http bedesign {{ mcp_url }}</pre></li>
+  <li><strong>Claude, web or desktop:</strong> Settings &rarr; Connectors &rarr; Add
+    custom connector, then paste the address.</li>
+  <li><strong>Any other client:</strong> add it as a remote HTTP MCP server.</li>
+</ul>
+<p class="muted">Use that address rather than this site's: the front end here gives up on
+a request after 60 seconds, which is less than a design is allowed to take.</p>
+
+<h2>Try asking</h2>
+<ul class="asks">
+  <li>Design ABE8e-SpRY guides over MAP2K1's MANE transcript, then show me the ones
+  that knock it out.</li>
+  <li>Which BE4max guides in exon 3 recreate a pathogenic ClinVar variant?</li>
+  <li>Give me the whole design file for that run as a TSV.</li>
+</ul>
+
+<h2>The tools</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+  <tbody>
+  <tr><td><code>resolve_gene</code></td>
+      <td>Finds the gene a symbol, or the start of one, names.</td></tr>
+  <tr><td><code>list_transcripts</code></td>
+      <td>A gene's transcripts, best choice first &mdash; MANE Select where there is
+      one.</td></tr>
+  <tr><td><code>list_editors</code></td>
+      <td>The base editors this engine knows, with each one's PAM and edit
+      window.</td></tr>
+  <tr><td><code>design_guides</code></td>
+      <td>Designs every guide over a transcript or a pasted sequence.</td></tr>
+  <tr><td><code>query_guides</code></td>
+      <td>One page of designed guides, filtered and sorted.</td></tr>
+  <tr><td><code>get_clinvar_annotations</code></td>
+      <td>Which known variant each edit would recreate.</td></tr>
+  <tr><td><code>export_run</code></td>
+      <td>A whole output file, byte for byte as the command line writes it.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Worth knowing</h2>
+<ul>
+  <li><code>design_guides</code> hands back counts, per-exon coverage and a run handle
+  rather than the guides themselves &mdash; a transcript routinely yields thousands, and
+  which of them matter is the next question. <code>query_guides</code> reads them.</li>
+  <li>Every filter <code>query_guides</code> takes names a value the design already
+  reported, so an assistant can only ask for something the result contains.</li>
+  <li>A design and the identical request from this website are one job writing one
+  result, so asking the same question twice designs once.</li>
+  <li>Only so many designs run at a time. Turned away for a busy pool, an assistant is
+  told to call again with the same arguments, and no work is lost &mdash; but starting
+  designs is rate limited per address, so a retry is not free.</li>
+  <li>A non-zero error count means the engine stopped part-way through that transcript,
+  so the designs are a partial answer rather than a final one.</li>
+</ul>
+</div>
+{% endblock %}

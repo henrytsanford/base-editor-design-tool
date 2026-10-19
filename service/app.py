@@ -83,6 +83,11 @@ SECURITY_HEADERS = {
 
 ROBOTS = 'User-agent: *\nDisallow: /\n'
 
+# What /mcp-help tells a visitor to connect to. The Cloud Run address rather than this
+# site's own, because Firebase Hosting cuts a request at 60 s and a design is allowed
+# longer than that -- an assistant pointed at the Hosting name loses the slow designs.
+MCP_URL = 'https://bedesign-ptj3oo2b3a-uc.a.run.app/api/mcp'
+
 # The preset dropdown, read from the engine's own table so it cannot offer an editor
 # the validator would then refuse.
 PRESETS = [dict(dataclasses.asdict(DesignParams.from_preset(name)), name=name)
@@ -234,6 +239,15 @@ def create_app(settings=None):
                     default_preset=DEFAULT_BE_TYPE, edits=EDITS,
                     sg_len_range=SG_LEN_RANGE,
                     intron_buffer_range=INTRON_BUFFER_RANGE)
+
+    @app.get('/mcp-help', response_class=HTMLResponse)
+    def mcp_help(request: Request):
+        """How to reach the same designs from a chat assistant.
+
+        Static: the page is the same whether or not this container mounted the MCP
+        app, since what it documents is the deployed service rather than this process.
+        """
+        return page(request, 'mcp_help.html', mcp_url=MCP_URL)
 
     @app.get('/genes', response_class=HTMLResponse)
     def genes(request: Request):

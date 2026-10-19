@@ -361,6 +361,23 @@ def test_the_form_preselects_the_default_editor(client):
     assert body.count(' selected') == 1
 
 
+def test_the_mcp_page_gives_an_address_that_can_be_connected_to(client):
+    """What a visitor came for: the address, and the command that registers it."""
+    from service.app import MCP_URL
+    response = client.get('/mcp-help')
+    assert response.status_code == 200
+    assert MCP_URL in response.text
+    assert 'claude mcp add --transport http bedesign %s' % MCP_URL in response.text
+    # The Hosting name cuts a request at 60 s, so it must not be what is offered.
+    assert 'bedesigner.web.app/api/mcp' not in response.text
+
+
+def test_every_page_offers_the_chat_assistant(client, cached_url):
+    """The page is reachable by clicking, not only by knowing its URL."""
+    for url in ['/', '/genes?q=MAP2K1', cached_url, '/genes?q=%3Cscript%3E']:
+        assert 'href="/mcp-help"' in client.get(url).text, url
+
+
 def test_a_gene_prefix_lists_the_genes_it_could_mean(client):
     response = client.get('/genes?q=MAP2K')
     assert response.status_code == 200
@@ -390,7 +407,8 @@ def test_a_hostile_gene_query_is_refused_and_escaped(client):
 
 def test_no_page_in_the_app_needs_javascript(client):
     """script-src is 'none', so a page that needed a script would simply break."""
-    urls = ['/', '/genes?q=MAP2K1', '/designs?transcript=%s&preset=ABE7.10' % ISY1]
+    urls = ['/', '/mcp-help', '/genes?q=MAP2K1',
+            '/designs?transcript=%s&preset=ABE7.10' % ISY1]
     for url in urls:
         response = client.get(url)
         assert '<script' not in response.text, url
