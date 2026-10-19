@@ -185,6 +185,13 @@ service restarting repeatedly rather than once, and -- once it is public -- the 
 budget alert. Any request keeps the instance warm, crawlers included, so a public URL
 costs more than its real use would suggest; the budget alert is how you find out.
 
+The service runs at 2 vCPU / 4 GiB: a design worker is single-threaded, and 4 vCPU ran
+the same jobs no faster. A Cloud Scheduler job, `bedesign-keepwarm`, GETs `/health` every
+5 minutes on weekdays 9am-6pm Eastern so the instance stays up through working hours and
+nobody waits on the cold start then. It has to ping `/health`: a `/healthz` request
+never reaches the instance. Expect the request log to show those pings, and the bill to
+carry that warm time whether or not anyone designs anything.
+
 `/health` answers 503 `worker crashed` from a design worker dying until a job next
 finishes normally. The service replaces the pool on its own, so a single 503 is not an
 outage; one that persists means the pool keeps dying. Cloud Run only restarts the
