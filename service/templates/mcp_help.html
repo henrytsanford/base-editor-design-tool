@@ -63,7 +63,8 @@ a request after 60 seconds, which is less than a design is allowed to take.</p>
   <li>A design and the identical request from this website are one job writing one
   result, so asking the same question twice designs once.</li>
   <li>Only so many designs run at a time. Turned away for a busy pool, an assistant is
-  told to call again, which costs nothing.</li>
+  told to call again with the same arguments, and no work is lost &mdash; but starting
+  designs is rate limited per address, so a retry is not free.</li>
   <li>A non-zero error count means the engine stopped part-way through that transcript,
   so the designs are a partial answer rather than a final one.</li>
 </ul>

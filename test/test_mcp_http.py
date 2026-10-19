@@ -107,6 +107,15 @@ def test_the_mcp_response_carries_the_security_headers(client):
     assert rpc(client, 'tools/list').headers['x-frame-options'] == 'DENY'
 
 
+def test_the_help_page_advertises_the_path_the_mount_serves(client):
+    """mcp_server.http owns the path, so the page cannot keep it in step by hand."""
+    from mcp_server.http import MCP_PATH, MOUNT_PATH
+
+    from service.app import MCP_URL as advertised
+    assert MOUNT_PATH + MCP_PATH == MCP_URL
+    assert advertised.endswith(MCP_URL), advertised
+
+
 def test_the_help_page_names_every_tool_that_is_served(client):
     """The page is hand-written prose, so a new tool has to be added to it.
 

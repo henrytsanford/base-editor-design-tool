@@ -140,6 +140,11 @@ a.button.download { font-size: 17px; padding: 10px 22px; white-space: nowrap; }
 pre { margin: 6px 0; padding: 8px 10px; background: var(--pill); border-radius: 4px;
       font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
 code { font-size: 13px; }
+/* The tools table holds sentences, not the short tokens a result table holds, so its
+   cells wrap: nowrap here would make every row on a phone a sideways scroll. The tool
+   names are the exception, being what a reader copies. */
+.doc table { white-space: normal; font-size: 13px; }
+.doc td:first-child { white-space: nowrap; }
 /* Example prompts, set apart from the instructions around them. */
 ul.asks li { color: var(--muted); }
 
