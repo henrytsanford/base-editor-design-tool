@@ -10,14 +10,24 @@ in, and the second has to carry the reference data it will answer from.
 
 ## Building
 
-    docker build -t bedesign:thin .
-    docker run --rm bedesign:thin pytest test/ -q
+    docker build --platform linux/amd64 -t bedesign:thin .
+    docker run --rm --platform linux/amd64 bedesign:thin pytest test/ -q
 
-    TAG=ensembl-116-clinvar-2026-09-09
-    docker build -f deploy/Dockerfile.bundled \
+    TAG=ensembl-116-clinvar-2026-09-09-$(git rev-parse --short HEAD)
+    docker build --platform linux/amd64 -f deploy/Dockerfile.bundled \
         --build-arg ENSEMBL_RELEASE=116 --build-arg CLINVAR_DATE=2026-09-09 \
         -t bedesign:$TAG refdata
-    docker run --rm bedesign:$TAG pytest test/ -q
+    docker run --rm --platform linux/amd64 bedesign:$TAG pytest test/ -q
+
+`--platform linux/amd64` on both, because Cloud Run serves amd64 and an Apple Silicon
+machine builds arm64 by default. The wrong architecture is not caught until the service
+is already being deployed, and then only indirectly: the image builds, its tests pass,
+it pushes, and the revision fails the startup probe with `Application exec likely
+failed` and no application log line at all, because nothing in the container ever
+executed. Traffic stays on the previous revision, so it costs a deploy rather than an
+outage. The flag is also on each `docker run` above, which otherwise picks the host's
+architecture over the image's; under emulation the bundled test run takes about twice
+as long.
 
 The second test run is the one that matters: with the bundle present the `bundle`-marked
 tests stop skipping, so `test/golden/` is compared against the real reference data using
@@ -26,11 +36,11 @@ the host means `constraints.txt` has drifted from what the goldens were generate
 read the diff before changing either.
 
 Note the bundled build's context is `refdata`, not `.`, and it copies only the release and
-date you name, so older builds left in `refdata/` stay out of the image. The tag names the
-same two because both are cache-key inputs: the image and the results it produces describe
-each other, and a rollback is redeploying the previous tag. Build it where `refdata/`
-already exists rather than in CI -- rebuilding the bundle is ~30 minutes plus about a
-gigabyte of downloads.
+date you name, so older builds left in `refdata/` stay out of the image. The tag names both
+because both are cache-key inputs: the image and the results it produces describe each
+other. The commit it carries is what separates two images over the same reference data, and
+a rollback is redeploying the previous tag. Build it where `refdata/` already exists rather
+than in CI -- rebuilding the bundle is ~30 minutes plus about a gigabyte of downloads.
 
 ## Running
 
