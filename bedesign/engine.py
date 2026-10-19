@@ -913,6 +913,9 @@ Designs sgRNAs for specified PAM sequence and writes to output
 '''
 def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, abs_pos, pos_for_index, fs, cds_map, utr, t, pam, exons, gene_strand, edit, window, cds_sequence, pam_len, sg_len, cds_start_exon, errors, annotations, variants, aa_map, codon_map, input_type, intron_buffer, filter_gc):
 	current_exon = cds_start_exon
+	# Positions whose context window holds an ambiguous base, so no guide could be
+	# designed there. Positions, not guides: the check runs before a strand is known.
+	ambiguous_skipped = set()
 	for i,e in enumerate(exons):
 		e = e.split(':')
 		label = 'Exon'+str(current_exon)
@@ -936,7 +939,10 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 			context = gene_seq[(pos-4):(pos+pam_len+sg_len+4)]
 			if len(context) == sg_len+pam_len+8:  #Check if full context is available for target sequence
 				m = re.search('[^ATCG]', context)
-				if m is None:
+				if m is not None:
+					if re.search('[' + AMBIGUOUS_BASES + ']', context):
+						ambiguous_skipped.add(pos)
+				else:
 					start = target[0:pam_len]
 					finish = target[sg_len:sg_len + pam_len]
 					m_fwd = re.search(get_pam_pattern(pam), finish)
@@ -1074,6 +1080,11 @@ def design_sgrnas(gene_name, assembly, chromosome, gene_id, designs, gene_seq, a
 										 transcript_alt_allele, genome_ref_allele, genome_alt_allele] + snp_row)
 			pos = pos+1
 		current_exon += 1
+	if ambiguous_skipped:
+		error = ('%d guide position(s) skipped: context contains an ambiguous base'
+				 % len(ambiguous_skipped))
+		log.warning('%s: %s', t, error)
+		errors.append([gene_name, t, 'N/A', 'N/A', error])
 	return 1  
 
 
@@ -1101,10 +1112,6 @@ def get_seq_info(seq):
 # The IUPAC ambiguity codes. GRCh38 hard-masks occasional genomic bases as 'N',
 # so a transcript's genomic span can carry them while its CDS does not.
 AMBIGUOUS_BASES = 'NRYSWKMBDHVnryswkmbdhv'
-
-
-def count_ambiguous(seq):
-	return len(re.findall('[' + AMBIGUOUS_BASES + ']', seq))
 
 
 def check_sequences(seq, allow_ambiguous=False):
@@ -1175,10 +1182,6 @@ def design_transcript(source, clinvar, transcript_id, params=None):
 		return failed(seq_error)
 	if tr_seq == '':
 		return failed('Transcript sequence not found')
-	ambiguous = count_ambiguous(tr_seq)
-	if ambiguous:
-		log.warning('%s: %d ambiguous base(s) in the genomic sequence; guides whose '
-					'context overlaps one are skipped', transcript_id, ambiguous)
 
 	if get_pro_sequence(source, transcript_id) == '':
 		return failed('Protein sequence not found')

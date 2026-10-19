@@ -7,8 +7,7 @@ intron, thousands of bases from any exon, and used to produce no designs at all.
 """
 import pytest
 
-from bedesign.engine import (DesignParams, check_sequences, count_ambiguous,
-                             design_transcript)
+from bedesign.engine import DesignParams, check_sequences, design_transcript
 from bedesign.transcript_source import get_source
 
 # Two 'N' bases in intron 3, both far outside the 30 bp the design loop reaches.
@@ -54,14 +53,13 @@ def test_check_sequences_can_allow_ambiguity():
     assert check_sequences("MKRAPLE", allow_ambiguous=True) != ""
 
 
-def test_count_ambiguous():
-    assert count_ambiguous("ACTGACTG") == 0
-    assert count_ambiguous("ACTNGnACTG") == 2
-
-
 @pytest.mark.bundle
 def test_intronic_n_still_designs(local_source):
-    """CD4's masked intronic bases must not cost the whole transcript."""
+    """CD4's masked intronic bases must not cost the whole transcript.
+
+    They sit far outside the window the design loop scans, so the run is not
+    merely non-empty: it has nothing to report at all.
+    """
     designs, errors, _ = design_transcript(
         local_source, None, CD4, DesignParams.from_preset("ABE8e-SpRY"))
     assert designs
@@ -83,10 +81,14 @@ def test_only_overlapping_guides_are_lost(local_source):
     masked, masked_errors, _ = design_transcript(
         MaskedSource(local_source, index), None, SMALL, params)
 
-    assert errors == [] and masked_errors == []
+    assert errors == []
     dropped = [row for row in designs if row not in masked]
     assert len(masked) == len(designs) - len(dropped)
     assert dropped, "the masked base was outside the designed region"
     # A base reaches at most one context window per start position, on either strand
     context_len = params.sg_len + len(params.pam) + 8
     assert len(dropped) <= 2 * context_len
+    # What was lost has to reach the error report: it is the only channel the CLI,
+    # the web service and the MCP server show a user.
+    assert len(masked_errors) == 1
+    assert "ambiguous base" in masked_errors[0][-1]
