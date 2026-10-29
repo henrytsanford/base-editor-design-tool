@@ -16,21 +16,42 @@ from service.results import EMPTY_FACETS, ROWS_PER_PAGE, page_of
 TOP_SUBSTITUTIONS = 15
 
 
+def coding_bp(parts):
+    """How many of an exon's bases are inside the CDS.
+
+    The whole exon for an internal coding one, and only the coding piece of an exon
+    that also carries UTR -- which is the length that decides whether skipping it
+    shifts the frame.
+    """
+    return sum(int(high - low + 1) for low, high, coding in parts if coding)
+
+
 def exon_coverage(table):
-    """Guides per exon, with each exon's length and whether it codes.
+    """Guides per exon, with each exon's length, coding length and whether it codes.
 
     Numbered from 1, the way the exon filter takes it. Empty when the bundle could not
     answer for the transcript, which is also when the web page draws no map.
+
+    `in_frame_skip` is the frame arithmetic a splice-site guide turns on: a coding
+    length that is a multiple of 3 means losing the exon keeps the reading frame, so a
+    disrupted junction can yield an internally deleted protein rather than a null. It
+    is the frame question only -- whether the shortened protein still works is not
+    something the sequence answers.
     """
     if table.coverage is None:
         return []
     geometry = table.coverage.geometry
     counts = table.coverage.exon_guides
-    return [{'exon': i + 1,
-             'bp': int(high - low + 1),
-             'coding': any(part[2] for part in geometry.parts[i]),
-             'guides': int(counts[i])}
-            for i, (low, high) in enumerate(geometry.exons)]
+    out = []
+    for i, (low, high) in enumerate(geometry.exons):
+        coding = coding_bp(geometry.parts[i])
+        out.append({'exon': i + 1,
+                    'bp': int(high - low + 1),
+                    'coding': coding > 0,
+                    'coding_bp': coding,
+                    'in_frame_skip': coding > 0 and coding % 3 == 0,
+                    'guides': int(counts[i])})
+    return out
 
 
 def top_substitutions(table, limit=TOP_SUBSTITUTIONS):
@@ -75,6 +96,8 @@ def build(manifest, table):
                    'errors': manifest['errors'],
                    'annotations': manifest['annotations']},
         'consequence': facets['consequence'],
+        'mutation': [{'value': value, 'count': count}
+                     for value, count in facets['mutation']],
         'significance': [{'value': value, 'count': count}
                          for value, count in facets['significance']],
         'any_match': facets['any_match'],

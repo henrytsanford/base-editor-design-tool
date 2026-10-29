@@ -7,12 +7,15 @@ engine prints can reach the protocol stream.
 """
 import ast
 import base64
+import dataclasses
 import gzip
 import json
 
 import pytest
 
 from bedesign import DESIGN_COLUMNS, DesignParams
+
+from mcp_server.server import INSTRUCTIONS
 
 from service.cachekey import manifest_key
 from service.storage import LocalStorage
@@ -41,6 +44,32 @@ def test_every_tool_is_advertised_as_read_only(client):
     for tool in listed.tools:
         assert tool.annotations.read_only_hint, tool.name
         assert tool.description, '%s has no description for the model' % tool.name
+
+
+def test_the_handshake_carries_the_instructions(client):
+    """That the string reaches the client, not merely that it is configured.
+
+    A server can hold an `instructions` string and never send it, and the config
+    still reads correctly -- the failure is visible only in what arrives. Nothing
+    else here would notice, because every other test drives the tools directly.
+    """
+    sent = client.instructions
+    assert sent, 'the server sent the client no instructions'
+    assert sent == INSTRUCTIONS
+
+
+def test_the_defaults_are_documented_where_the_arguments_are(client):
+    """Each design parameter's description names its own default.
+
+    A default stated only in prose elsewhere is a default a caller overrides by
+    accident. These are interpolated from DesignParams, so this also catches the
+    documented value drifting from the real one.
+    """
+    design = next(tool for tool in client.list_tools().tools
+                  if tool.name == 'design_guides')
+    described = design.input_schema['properties']
+    for name, default in dataclasses.asdict(DesignParams()).items():
+        assert str(default) in described[name]['description'], name
 
 
 def test_list_editors_offers_only_editors_the_validator_accepts(client):

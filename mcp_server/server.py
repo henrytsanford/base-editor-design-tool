@@ -27,6 +27,8 @@ from service.references import TRANSCRIPT_LIMIT
 from service.references import References
 from service.results import UnknownFilterValue
 
+from bedesign.engine import DEFAULT_BE_TYPE, DesignParams
+
 from . import tools
 from .runs import (DesignFailed, ResultTooLarge, RunNotFound, RunStore,
                    ServiceBusy)
@@ -47,7 +49,47 @@ filter query_guides takes names a value design_guides reported.
 
 A non-zero counts.errors means the engine stopped early on that transcript, so the
 designs are a partial answer.
+
+A run that names no editor uses the ABE8e-SpRY preset: PAM NNN, window 4-8, 20 nt,
+A-G, and 30 bp of intron. Every argument's own description states its default, and
+`params` in the response reports the settings a run was actually made under, which is
+how to read the pam and window a preset chose. Note what `params` cannot tell you: it
+echoes an argument you passed, so it shows an override rather than the default that
+override replaced.
+
+Those 30 bp of intron already cover every canonical splice site -- the +1/+2 donor and
+the -1/-2 acceptor. Passing intron_buffer to reach a splice site therefore narrows the
+run instead of widening it. Pass it for a deep-intronic target and little else.
+
+No A-G edit creates a stop codon, on either strand: the only codons that would become
+TAA, TAG or TGA are already stops. An adenine editor therefore reports no Nonsense
+category, and every lof guide in such a run is a splice-donor or splice-acceptor
+disruption rather than a truncation. A cytosine editor makes nonsense normally, out of
+CAA, CAG, CGA and antisense TGG.
+
+ABE8e-SpRY carries PAM NNN because SpRY has no strict requirement, not because every
+PAM reads alike: it is substantially more active at NRN than at NYN. The engine does
+not rank by this, so prefer an NRN PAM when choosing between guides and say which
+picks are NYN.
+
+exon_coverage reports in_frame_skip per exon, beside the coding_bp it is computed
+from. A splice-site guide works by dropping the exon it borders, and an internal exon
+whose coding length is a multiple of 3 drops out in frame -- leaving a shortened
+protein that may still function rather than a null. Worth saying before recommending
+that junction. It is the frame arithmetic only, and it reads differently on a first or
+last coding exon, where a skip takes the start or stop codon with it.
+
+export_run returns a file's contents into the conversation; it writes nothing to disk.
+A whole transcript is large, so filter with query_guides or ask for
+encoding='base64-gzip' unless the user wants the raw file.
 """
+
+# What a run gets when the caller names nothing, interpolated into the parameter
+# descriptions below rather than written out in them. The CLI derives its argparse
+# defaults from this same dataclass, so the documented default and the real one cannot
+# drift -- and a caller reading one argument's description is told its default there,
+# which no amount of prose elsewhere achieves.
+DEFAULTS = DesignParams()
 
 # Everything here reads reference data and writes nothing the caller can observe
 # beyond its own cached result.
@@ -157,20 +199,28 @@ def build_server(settings=None, context=None):
             'What to call the sequence in the output. Required with sequence.'))] = None,
         preset: Annotated[str | None, Field(max_length=32, description=(
             'A base editor from list_editors. Cannot be combined with pam, window, '
-            'sg_len or edit.'))] = None,
+            'sg_len or edit. Naming none of those five runs the %s settings below.'
+            % DEFAULT_BE_TYPE))] = None,
         pam: Annotated[str | None, Field(max_length=8, description=(
-            '2-8 IUPAC codes, e.g. NGG.'))] = None,
+            '2-8 IUPAC codes, e.g. NGG. Defaults to %s.' % DEFAULTS.pam))] = None,
         window: Annotated[str | None, Field(max_length=8, description=(
-            'The edit window within the guide, e.g. 4-8.'))] = None,
-        sg_len: Annotated[int | None, Field(ge=SG_LEN_RANGE[0],
-                                    le=SG_LEN_RANGE[1])] = None,
+            'The edit window within the guide, e.g. 4-8. Defaults to %s.'
+            % DEFAULTS.window))] = None,
+        sg_len: Annotated[int | None, Field(
+            ge=SG_LEN_RANGE[0], le=SG_LEN_RANGE[1], description=(
+            'Guide length in nt. Defaults to %d.' % DEFAULTS.sg_len))] = None,
         edit: Annotated[Literal['C-T', 'A-G', 'all'] | None, Field(description=(
-            'Which deaminase pass to run.'))] = None,
+            'Which deaminase pass to run. Defaults to %s.'
+            % DEFAULTS.edit))] = None,
         intron_buffer: Annotated[int | None, Field(
             ge=INTRON_BUFFER_RANGE[0], le=INTRON_BUFFER_RANGE[1], description=(
-            'How far into each intron to design, in bp. Allowed alongside a preset.'))] = None,
+            'How far into each intron to design, in bp. Allowed alongside a preset. '
+            'Defaults to %d, which already covers every canonical splice site, so a '
+            'value passed to reach one narrows the run rather than widening it.'
+            % DEFAULTS.intron_buffer))] = None,
         filter_gc: Annotated[bool | None, Field(description=(
-            'Drop guides with a GC motif. Allowed alongside a preset.'))] = None,
+            'Drop guides with a GC motif. Allowed alongside a preset. Defaults to %s.'
+            % DEFAULTS.filter_gc))] = None,
     ) -> dict[str, Any]:
         """Designs every possible guide over a transcript or a pasted sequence.
 
