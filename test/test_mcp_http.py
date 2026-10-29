@@ -15,6 +15,8 @@ from service.cachekey import MANIFEST
 from service.config import Settings
 from service.jobs import PoolBusy
 
+from mcp_server.server import INSTRUCTIONS
+
 # The app opens the reference bundle when it starts, so every test here needs one --
 # the same reason test_service_app.py marks its whole module.
 pytestmark = pytest.mark.bundle
@@ -75,6 +77,21 @@ def test_the_endpoint_answers_at_one_url(client):
                                                   'method': 'tools/list'},
                              headers=HEADERS, follow_redirects=False)
     assert redirected.status_code == 307
+
+
+def test_initialize_returns_the_instructions(client):
+    """The one thing a client reads before it calls anything.
+
+    Over this transport specifically: stateless streamable HTTP is a different path
+    through the SDK than the in-process client test_mcp_tools.py uses, and it is the
+    path Cloud Run serves. A string that arrives on one and not the other would
+    otherwise look like a client bug.
+    """
+    answered = rpc(client, 'initialize',
+                   {'protocolVersion': '2025-06-18', 'capabilities': {},
+                    'clientInfo': {'name': 'test', 'version': '0'}})
+    assert answered.status_code == 200, answered.text
+    assert answered.json()['result']['instructions'] == INSTRUCTIONS
 
 
 def test_a_real_host_header_is_not_refused(client):

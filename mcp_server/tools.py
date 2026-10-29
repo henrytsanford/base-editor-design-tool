@@ -316,8 +316,9 @@ def query_guides(ctx, run_id, page=1, consequence=None, mutation=None,
     if columns:
         unknown = [name for name in columns if name not in names]
         if unknown:
-            raise ValidationError('Not a column of the table: %s.'
-                                  % ', '.join(unknown))
+            raise ValidationError(
+                'Not a column of the table: %s. The columns are: %s.'
+                % (', '.join(unknown), ', '.join(names)))
         keep = [names.index(name) for name in columns]
         names = list(columns)
         rows = [[row[i] for i in keep] for row in rows]

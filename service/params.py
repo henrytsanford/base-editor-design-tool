@@ -303,7 +303,10 @@ def parse_view_query(query):
     """
     sort = _one(query, 'sort') or ''
     if sort and sort not in SORT_COLUMNS:
-        raise ValidationError('sort must name a column of the table.')
+        # Named in full: the columns carry spaces and a '#', so a caller that got one
+        # slightly wrong cannot guess the right spelling from a refusal alone.
+        raise ValidationError('sort must name a column of the table: %s.'
+                              % ', '.join(DESIGN_COLUMNS))
 
     page = _one(query, 'page')
     page = _int(page, 'page', 1, MAX_PAGE) if page is not None else 1

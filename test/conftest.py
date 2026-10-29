@@ -91,6 +91,11 @@ class SyncClient(object):
     def list_tools(self):
         return self._portal.call(self._client.list_tools)
 
+    @property
+    def instructions(self):
+        """What the server sent at initialize, as the client received it."""
+        return self._client.instructions
+
 
 @pytest.fixture
 def client(mcp_server, portal):

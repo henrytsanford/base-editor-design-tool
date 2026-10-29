@@ -87,8 +87,8 @@ def page_of(matched, page):
 
 # The shape facets() returns, with nothing in it: what a caller reports for a
 # result too large to parse. Beside facets() so the two cannot disagree.
-EMPTY_FACETS = {'consequence': [], 'significance': [], 'any_match': 0,
-                'edits': []}
+EMPTY_FACETS = {'consequence': [], 'mutation': [], 'significance': [],
+                'any_match': 0, 'edits': []}
 
 
 class UnknownFilterValue(ValueError):
@@ -209,6 +209,10 @@ class ResultTable(object):
             # nothing to point at.
             'consequence': [{'cls': name, 'label': CLASS_LABELS[name], 'count': count}
                             for name, count in zip(CLASSES, counts) if count],
+            # The engine's own categories. Not the same question as `consequence`,
+            # which is one worst class per guide: a guide editing two bases reports
+            # one category per edit, so the counts here sum past the guide count.
+            'mutation': counted(MUTATION_COLUMN),
             'significance': counted(SIGNIFICANCE_COLUMN, skip=(NO_MATCH,)),
             'any_match': int(self._any_match.sum()),
             # Which edits the result holds. Most editors make one, and a dropdown
