@@ -33,3 +33,6 @@ results/
 # Firebase CLI deploy cache and logs
 .firebase/
 firebase-debug.log
+
+# Local CD4 base-editing analyses and the deck built from them
+base-edit-analysis/

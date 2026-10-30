@@ -58,6 +58,30 @@ def test_the_handshake_carries_the_instructions(client):
     assert sent == INSTRUCTIONS
 
 
+def test_the_load_bearing_facts_survive_a_client_that_drops_instructions(client):
+    """Each engine fact reaches the model through a tool description too.
+
+    Observed in production: a client can connect to this server, load every tool
+    schema and run designs, while surfacing no `instructions` string at all -- the
+    server sends one on every protocol version, and it still does not arrive. Tool
+    descriptions do arrive, because they are the schemas. So nothing a caller has to
+    know may live only in the instructions string.
+    """
+    described = ' '.join(tool.description for tool in client.list_tools().tools
+                         if tool.description)
+    schemas = json.dumps([tool.input_schema for tool in client.list_tools().tools])
+    both = described + schemas
+    for fact in ['stop codon',        # an A-G pass makes no nonsense mutation
+                 'NRN',               # SpRY is more active there than at NYN
+                 'in_frame_skip',     # a splice-site skip can stay in frame
+                 'mutation categories',
+                 'override',          # params echoes one, not the default it replaced
+                 'written to disk',   # export_run writes nothing; it returns the bytes
+                 'transcript is large',
+                 str(DesignParams().intron_buffer)]:
+        assert fact in both, 'only the instructions string carries %r' % fact
+
+
 def test_the_defaults_are_documented_where_the_arguments_are(client):
     """Each design parameter's description names its own default.
 

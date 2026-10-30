@@ -184,6 +184,18 @@ def build_server(settings=None, context=None):
         `edit` is which deaminase the editor carries: 'C-T' for a cytosine base
         editor, 'A-G' for an adenine one. Designing with edit='all' runs both passes,
         which is what to do when the user has not committed to an editor yet.
+
+        No A-G edit can create a stop codon, on either strand: the only codons that
+        would become TAA, TAG or TGA are already stops. An adenine editor therefore
+        makes no nonsense mutation at all, and every loss-of-function guide in such a
+        run is a splice-donor or splice-acceptor disruption rather than a truncation.
+        A cytosine editor makes nonsense normally, out of CAA, CAG, CGA and antisense
+        TGG.
+
+        A PAM of NNN means the editor has no strict requirement, not that every PAM
+        reads alike. ABE8e-SpRY is substantially more active at NRN than at NYN, which
+        this engine does not rank by, so prefer an NRN PAM when choosing between
+        guides and say which picks are NYN.
         """
         return _call(tools.list_editors, ctx.request_context.lifespan_context)
 
@@ -210,7 +222,8 @@ def build_server(settings=None, context=None):
             ge=SG_LEN_RANGE[0], le=SG_LEN_RANGE[1], description=(
             'Guide length in nt. Defaults to %d.' % DEFAULTS.sg_len))] = None,
         edit: Annotated[Literal['C-T', 'A-G', 'all'] | None, Field(description=(
-            'Which deaminase pass to run. Defaults to %s.'
+            'Which deaminase pass to run. Defaults to %s, which cannot create a stop '
+            'codon and so makes no nonsense mutation; see list_editors.'
             % DEFAULTS.edit))] = None,
         intron_buffer: Annotated[int | None, Field(
             ge=INTRON_BUFFER_RANGE[0], le=INTRON_BUFFER_RANGE[1], description=(
@@ -229,8 +242,21 @@ def build_server(settings=None, context=None):
         question. Read them with query_guides, or take the whole file with export_run.
 
         The summary reports what the result actually contains -- consequence classes,
-        the ClinVar classifications present, per-exon counts, the busiest residue
-        substitutions -- and every query_guides filter names one of those values.
+        the mutation categories present, the ClinVar classifications present, the
+        busiest residue substitutions, and per-exon counts carrying each exon's coding
+        length and whether losing it would skip in frame -- and every query_guides
+        filter names one of those values.
+
+        exon_coverage's in_frame_skip is the frame arithmetic a splice-site guide turns
+        on: an internal exon whose coding length is a multiple of 3 drops out in frame,
+        leaving a shortened protein that may still function rather than a null. Worth
+        saying before recommending that junction. It reads differently on a first or
+        last coding exon, where a skip takes the start or stop codon with it.
+
+        `params` reports the settings the run was actually made under, which is how to
+        read the pam and window a preset chose. Note what it cannot tell you: it
+        echoes an argument you passed, so it shows an override rather than the default
+        that override replaced.
 
         Watch counts.errors: a non-zero count means the engine abandoned the
         transcript part-way, so the designs are incomplete rather than final.
@@ -324,9 +350,13 @@ def build_server(settings=None, context=None):
         """A whole output file, byte for byte as the command-line tool writes it.
 
         Use this when the user wants the data itself rather than an answer about it --
-        to save, to hand to a collaborator, or to load into their own analysis. Too
+        to save, to hand to a collaborator, or to load into their own analysis. The
+        contents come back into the conversation; nothing is written to disk. Too
         large for `text` raises rather than truncating; ask again with
         encoding='base64-gzip'.
+
+        A whole transcript is large, so answer a question about the designs from
+        query_guides and keep this for when the raw file is what was asked for.
         """
         return _call(tools.export_run, ctx.request_context.lifespan_context,
                      run_id=run_id, file=file, encoding=encoding,
