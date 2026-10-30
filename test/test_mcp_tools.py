@@ -75,6 +75,9 @@ def test_the_load_bearing_facts_survive_a_client_that_drops_instructions(client)
                  'NRN',               # SpRY is more active there than at NYN
                  'in_frame_skip',     # a splice-site skip can stay in frame
                  'mutation categories',
+                 'override',          # params echoes one, not the default it replaced
+                 'written to disk',   # export_run writes nothing; it returns the bytes
+                 'transcript is large',
                  str(DesignParams().intron_buffer)]:
         assert fact in both, 'only the instructions string carries %r' % fact
 

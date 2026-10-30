@@ -253,6 +253,11 @@ def build_server(settings=None, context=None):
         saying before recommending that junction. It reads differently on a first or
         last coding exon, where a skip takes the start or stop codon with it.
 
+        `params` reports the settings the run was actually made under, which is how to
+        read the pam and window a preset chose. Note what it cannot tell you: it
+        echoes an argument you passed, so it shows an override rather than the default
+        that override replaced.
+
         Watch counts.errors: a non-zero count means the engine abandoned the
         transcript part-way, so the designs are incomplete rather than final.
         """
@@ -345,9 +350,13 @@ def build_server(settings=None, context=None):
         """A whole output file, byte for byte as the command-line tool writes it.
 
         Use this when the user wants the data itself rather than an answer about it --
-        to save, to hand to a collaborator, or to load into their own analysis. Too
+        to save, to hand to a collaborator, or to load into their own analysis. The
+        contents come back into the conversation; nothing is written to disk. Too
         large for `text` raises rather than truncating; ask again with
         encoding='base64-gzip'.
+
+        A whole transcript is large, so answer a question about the designs from
+        query_guides and keep this for when the raw file is what was asked for.
         """
         return _call(tools.export_run, ctx.request_context.lifespan_context,
                      run_id=run_id, file=file, encoding=encoding,
